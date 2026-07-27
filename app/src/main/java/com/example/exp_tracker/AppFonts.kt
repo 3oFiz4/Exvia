@@ -12,7 +12,7 @@ object AppFonts {
     fun jetRoboto(context: Context): Typeface {
         cached?.let { return it }
         val loaded = try {
-            Typeface.createFromAsset(context.assets, "fonts/JetRoboto.ttf")
+            Typeface.createFromAsset(context.assets, "fonts/JetBrains.ttf")
         } catch (_: Exception) {
             Typeface.create("sans-serif", Typeface.NORMAL)
         }
