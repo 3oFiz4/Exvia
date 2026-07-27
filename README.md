@@ -1,6 +1,41 @@
-# exp_tracker v1.8
+<img width="216" height="480" alt="Screenshot_2026-07-27-18-46-49-277_com example exp_tracker" src="https://github.com/user-attachments/assets/e417c56f-1fd5-41bd-bbe3-1b6430d128b8" />
+<img width="216" height="480" alt="Screenshot_2026-07-27-18-46-44-433_com example exp_tracker" src="https://github.com/user-attachments/assets/8ade00a9-a140-4b4d-a73f-02d709558bd1" />
+<img width="216" height="480" alt="Screenshot_2026-07-27-18-46-21-522_com example exp_tracker" src="https://github.com/user-attachments/assets/d891fdde-f4d8-4d39-9374-05e0fcfaaaa9" />
+<img width="216" height="480" alt="Screenshot_2026-07-27-18-46-11-768_com example exp_tracker" src="https://github.com/user-attachments/assets/88162336-62d9-4f94-9b5e-76b800f04b45" />
+<img width="216" height="480" alt="Screenshot_2026-07-27-18-44-56-760_com example exp_tracker" src="https://github.com/user-attachments/assets/5de0cf18-48ee-4b0e-8f8e-bc3c10aa9d82" />
+<img width="216" height="480" alt="Screenshot_2026-07-27-20-54-26-980_com example exp_tracker" src="https://github.com/user-attachments/assets/4eb9d212-0926-4046-9fc3-b506b882b48f" />
+<img width="216" height="480" alt="Screenshot_2026-07-27-20-54-17-746_com example exp_tracker" src="https://github.com/user-attachments/assets/33aa3094-fc28-4ff5-b6d3-367ab9c6fcdf" />
+<img width="216" height="480" alt="Screenshot_2026-07-27-20-54-09-403_com example exp_tracker" src="https://github.com/user-attachments/assets/7b625048-0fcd-4e15-8808-29696acbb826" />
 
-Minimal schema-driven Android JSON expense editor backed by GitHub. The app dynamically infers fields from the selected JSON file, supports CRUD/file management, configurable themes/repository settings, autocomplete, filtering, finance statistics, and interactive plots.
+
+
+# exp_tracker
+
+Minimal Android expense editor backed directly by JSON files in a GitHub repository.
+
+The app uses GitHub's REST Contents API. A write replaces the selected JSON file using its latest SHA, and GitHub creates the commit directly on `main`. No Git executable or local `.git` directory is stored on the phone.
+
+# Installation
+1. Create your own GitHub repository, and ensure it is private, and your GitHub PAT is initialized
+2. Within the GitHub repository, initialize a folder within, it can be anything, I personally created `Financial/`
+3. Within the folder, create your first expenses `.json`. It track any .json file under `Financial/`, I personally name it this way `@MMMM_expenses.json`
+4. For the template, copy and paste this into the expenses file:
+```
+[
+  {
+    "date": "Test",
+    "price": "999",
+    "code": "Food",
+    "description": "coffee"
+  }
+]
+```
+5. Ensure every changes it commited, now git clone this repository on your Android Studio `git clone https://github.com/3oFiz4/exp_tracker`
+6. Go to `app/src/main/java/com/example/exp_tracker/RepoConfig.kt` and modify the configuration, as to what we did before.
+7. Build the application via command line
+8. Install the apk
+9. When you open the app for the first time, it will require you to input your GitHub PAT, copy your GitHub PAT and paste it there. This is the "password" or "token" to access your repository, because it is private.
+10. Wait for a minute, and the file will be loaded
 
 ## v1.8 changes
 
