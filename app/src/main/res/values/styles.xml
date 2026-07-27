@@ -1,14 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+<<<<<<< HEAD
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowBackground">#000000</item>
         <item name="android:colorBackground">#000000</item>
         <item name="android:textColor">#FFFFFF</item>
         <item name="android:colorAccent">#FFFFFF</item>
+=======
+    <style name="AppTheme" parent="AppTheme.Dark" />
+
+    <style name="AppTheme.Dark" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:colorBackground">#000000</item>
+        <item name="android:textColor">#EDEDED</item>
+        <item name="android:colorAccent">#F72323</item>
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
         <item name="android:navigationBarColor">#000000</item>
         <item name="android:statusBarColor">#000000</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>
+<<<<<<< HEAD
+=======
+
+    <style name="AppTheme.Light" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">#FFFFFF</item>
+        <item name="android:colorBackground">#FFFFFF</item>
+        <item name="android:textColor">#1F1F1F</item>
+        <item name="android:colorAccent">#F72323</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
 </resources>

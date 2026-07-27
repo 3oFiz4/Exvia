@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # Android / Gradle build outputs
+=======
+# Gradle / Android build output
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
 .gradle/
 build/
 **/build/
@@ -6,20 +10,33 @@ build/
 # Local Android SDK path
 local.properties
 
+<<<<<<< HEAD
 # Android Studio / IntelliJ
 .idea/
 *.iml
 
 # Signing keys — NEVER commit these
+=======
+# Android Studio / IntelliJ local state
+.idea/
+*.iml
+
+# Signing material - never commit
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
 *.jks
 *.keystore
 keystore.properties
 
+<<<<<<< HEAD
 # APK / App Bundle outputs
+=======
+# Built packages
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
 *.apk
 *.aab
 *.ap_
 
+<<<<<<< HEAD
 # Native build outputs
 .externalNativeBuild/
 .cxx/
@@ -32,6 +49,16 @@ Thumbs.db
 *.log
 
 # Temporary files
+=======
+# Native build output
+.externalNativeBuild/
+.cxx/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+*.log
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
 *.tmp
 *.swp
 *~

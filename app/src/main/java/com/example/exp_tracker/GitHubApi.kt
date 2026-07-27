@@ -10,6 +10,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+<<<<<<< HEAD
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -85,10 +86,68 @@ class GitHubApi(private val token: String) {
             newText = serialize(root),
             previousSha = existing.sha,
             message = "Expense at $date: $normalizedPrice, ($cleanTicker) $cleanDescription",
+=======
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
+/**
+ * GitHub Contents API client. Writes create commits directly on the configured branch.
+ */
+class GitHubApi(
+    private val token: String,
+    private val settings: RepoSettings,
+) {
+    private data class EditableDocument(val root: Any, val items: JSONArray)
+
+    fun listExpenseFiles(): List<RepoFile> {
+        val response = try {
+            request("GET", contentsUrl(settings.folder))
+        } catch (e: GitHubHttpException) {
+            if (e.statusCode == 404) return emptyList()
+            throw e
+        }
+        val array = JSONArray(response)
+        return (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val name = item.optString("name")
+            if (item.optString("type") != "file" || !name.endsWith(".json", ignoreCase = true)) return@mapNotNull null
+            RepoFile(name, item.optString("path"), item.optString("sha"))
+        }.sortedByDescending { it.name.lowercase() }
+    }
+
+    fun fetchTable(path: String): TableData = parseTable(getFile(path).text)
+
+    fun appendRow(path: String, inputValues: Map<String, String>): String {
+        val existing = getFile(path)
+        val document = parseEditableDocument(existing.text)
+        val existingKeys = collectKeys(document.items)
+        val allKeys = (existingKeys + inputValues.keys).distinct()
+        val dateKey = settings.detectDateKey(allKeys)
+        val values = LinkedHashMap(inputValues)
+        val now = currentDateTime()
+        if (dateKey != null && values[dateKey].isNullOrBlank()) values[dateKey] = now
+
+        val item = JSONObject()
+        for (key in allKeys) {
+            val value = values[key]?.trim().orEmpty()
+            if (value.isBlank()) continue
+            putTypedValue(item, document.items, key, value, settings.detectTagsKey(allKeys))
+        }
+        document.items.put(item)
+
+        val tableShape = tableShape(allKeys)
+        val date = tableShape.dateKey?.let { values[it]?.trim() }.orEmpty().ifBlank { now }
+        putFile(
+            path = path,
+            newText = serialize(document.root),
+            previousSha = existing.sha,
+            message = buildExpenseCommitMessage(date, values, tableShape, path),
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
         )
         return date
     }
 
+<<<<<<< HEAD
     fun updateExpense(
         path: String,
         originalRow: ExpenseRow,
@@ -133,17 +192,57 @@ class GitHubApi(private val token: String) {
             previousSha = existing.sha,
             message = "Remove expense at ${row.date}: ${row.price}, (${row.ticker}) ${row.description}",
         )
+=======
+    fun updateRow(path: String, originalRow: DynamicRow, inputValues: Map<String, String>) {
+        val existing = getFile(path)
+        val document = parseEditableDocument(existing.text)
+        val index = locateRowIndex(document.items, originalRow)
+        val existingKeys = collectKeys(document.items)
+        val allKeys = (existingKeys + inputValues.keys).distinct()
+        val tagsKey = settings.detectTagsKey(allKeys)
+        val replacement = JSONObject()
+        for (key in allKeys) {
+            val value = inputValues[key]?.trim().orEmpty()
+            if (value.isBlank()) continue
+            putTypedValue(replacement, document.items, key, value, tagsKey)
+        }
+        document.items.put(index, replacement)
+
+        val shape = tableShape(allKeys)
+        val date = shape.dateKey?.let { inputValues[it] }.orEmpty().ifBlank { currentDateTime() }
+        putFile(
+            path,
+            serialize(document.root),
+            existing.sha,
+            "Update expense at $date",
+        )
+    }
+
+    fun deleteRow(path: String, row: DynamicRow) {
+        val existing = getFile(path)
+        val document = parseEditableDocument(existing.text)
+        val index = locateRowIndex(document.items, row)
+        document.items.remove(index)
+        val dateKey = settings.detectDateKey(row.values.keys.toList())
+        val label = dateKey?.let { row.values[it] }.orEmpty().ifBlank { "row ${index + 1}" }
+        putFile(path, serialize(document.root), existing.sha, "Remove expense at $label")
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
     }
 
     fun createExpenseFile(fileNameInput: String): RepoFile {
         val fileName = normalizeFileName(fileNameInput)
+<<<<<<< HEAD
         val path = RepoConfig.pathFor(fileName)
+=======
+        val path = settings.pathFor(fileName)
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
         try {
             getFile(path)
             throw IllegalArgumentException("$fileName already exists.")
         } catch (e: GitHubHttpException) {
             if (e.statusCode != 404) throw e
         }
+<<<<<<< HEAD
 
         putFile(
             path = path,
@@ -151,6 +250,9 @@ class GitHubApi(private val token: String) {
             previousSha = null,
             message = "Create expense file: $fileName",
         )
+=======
+        putFile(path, "[]\n", null, "Create expense file: $fileName")
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
         return listExpenseFiles().first { it.name.equals(fileName, ignoreCase = true) }
     }
 
@@ -159,6 +261,7 @@ class GitHubApi(private val token: String) {
         val body = JSONObject().apply {
             put("message", "Remove expense file: ${file.name}")
             put("sha", latest.sha)
+<<<<<<< HEAD
             put("branch", RepoConfig.BRANCH)
         }
         request(
@@ -357,6 +460,157 @@ class GitHubApi(private val token: String) {
             }
         }
         return ""
+=======
+            put("branch", settings.branch)
+        }
+        request("DELETE", contentsUrl(file.path, includeRef = false), body.toString())
+    }
+
+    private fun parseTable(text: String): TableData {
+        val document = parseEditableDocument(text)
+        val keys = collectKeys(document.items)
+        val shape = tableShape(keys)
+        val rows = mutableListOf<DynamicRow>()
+        for (i in 0 until document.items.length()) {
+            val item = document.items.optJSONObject(i) ?: continue
+            val values = linkedMapOf<String, String>()
+            for (key in keys) {
+                values[key] = displayValue(item.opt(key), key == shape.tagsKey)
+            }
+            rows += DynamicRow(LinkedHashMap(values), i, item.toString())
+        }
+        val sorted = if (shape.dateKey != null) {
+            rows.sortedWith(compareByDescending<DynamicRow> {
+                Statistics.parseDate(it.values[shape.dateKey].orEmpty()) ?: Long.MIN_VALUE
+            }.thenByDescending { it.originalIndex })
+        } else rows
+        return shape.copy(rows = sorted)
+    }
+
+    private fun tableShape(keys: List<String>): TableData = TableData(
+        keys = keys,
+        rows = emptyList(),
+        dateKey = settings.detectDateKey(keys),
+        moneyKey = settings.detectMoneyKey(keys),
+        tickerKey = settings.detectTickerKey(keys),
+        tagsKey = settings.detectTagsKey(keys),
+    )
+
+    private fun parseEditableDocument(text: String): EditableDocument {
+        if (text.isBlank()) {
+            val array = JSONArray()
+            return EditableDocument(array, array)
+        }
+        val root = JSONTokener(text.trim()).nextValue()
+        return when (root) {
+            is JSONArray -> EditableDocument(root, root)
+            is JSONObject -> {
+                val configured = if (settings.arrayKey.isNotBlank()) root.optJSONArray(settings.arrayKey) else null
+                val array = configured ?: firstArray(root)
+                    ?: throw JSONException("JSON object has no array to use as its table.")
+                EditableDocument(root, array)
+            }
+            else -> throw JSONException("JSON root must be an array or an object containing an array.")
+        }
+    }
+
+    private fun firstArray(root: JSONObject): JSONArray? {
+        val iterator = root.keys()
+        while (iterator.hasNext()) {
+            val key = iterator.next()
+            val value = root.opt(key)
+            if (value is JSONArray) return value
+        }
+        return null
+    }
+
+    private fun collectKeys(items: JSONArray): List<String> {
+        val keys = linkedSetOf<String>()
+        for (i in 0 until items.length()) {
+            val item = items.optJSONObject(i) ?: continue
+            val iterator = item.keys()
+            while (iterator.hasNext()) keys += iterator.next()
+        }
+        return keys.toList()
+    }
+
+    private fun displayValue(value: Any?, isTags: Boolean): String {
+        if (value == null || value === JSONObject.NULL) return ""
+        if (isTags) {
+            return when (value) {
+                is JSONArray -> (0 until value.length()).mapNotNull { index ->
+                    value.opt(index)?.toString()?.trim()?.takeIf { it.isNotBlank() }
+                }.joinToString(", ")
+                else -> tagsStorageToDisplay(value.toString())
+            }
+        }
+        return when (value) {
+            is JSONArray, is JSONObject -> value.toString()
+            else -> value.toString()
+        }
+    }
+
+    private fun putTypedValue(item: JSONObject, items: JSONArray, key: String, input: String, tagsKey: String?) {
+        if (key == tagsKey) {
+            item.put(key, normalizeTagsForStorage(input))
+            return
+        }
+        when (inferColumnType(items, key)) {
+            "number" -> {
+                if (input.startsWith("+")) item.put(key, input)
+                else item.put(key, input.toBigDecimalOrNull() ?: input)
+            }
+            "boolean" -> item.put(key, input.equals("true", ignoreCase = true))
+            else -> item.put(key, input)
+        }
+    }
+
+    private fun inferColumnType(items: JSONArray, key: String): String {
+        var numbers = 0
+        var booleans = 0
+        var strings = 0
+        for (i in 0 until items.length()) {
+            val obj = items.optJSONObject(i) ?: continue
+            if (!obj.has(key) || obj.isNull(key)) continue
+            when (obj.opt(key)) {
+                is Number -> numbers++
+                is Boolean -> booleans++
+                else -> strings++
+            }
+        }
+        return when {
+            numbers > 0 && strings == 0 && booleans == 0 -> "number"
+            booleans > 0 && numbers == 0 && strings == 0 -> "boolean"
+            else -> "string"
+        }
+    }
+
+    private fun locateRowIndex(items: JSONArray, row: DynamicRow): Int {
+        fun matches(index: Int): Boolean = items.optJSONObject(index)?.toString() == row.originalJson
+        if (row.originalIndex in 0 until items.length() && matches(row.originalIndex)) return row.originalIndex
+        val matches = (0 until items.length()).filter(::matches)
+        require(matches.size == 1) { "The row changed remotely or is ambiguous. Refresh before editing/deleting it." }
+        return matches.single()
+    }
+
+    private fun buildExpenseCommitMessage(
+        date: String,
+        values: Map<String, String>,
+        shape: TableData,
+        path: String,
+    ): String {
+        val money = shape.moneyKey?.let { values[it]?.trim() }.orEmpty()
+        val ticker = shape.tickerKey?.let { values[it]?.trim() }.orEmpty()
+        val descriptionKey = values.keys.firstOrNull {
+            it.equals("description", true) || it.equals("desc", true) || it.equals("name", true)
+        }
+        val description = descriptionKey?.let { values[it]?.trim() }.orEmpty()
+        return if (shape.moneyKey != null || shape.tickerKey != null || description.isNotBlank()) {
+            "Expense at $date: $money, ($ticker) $description"
+        } else {
+            "Amend ${path.substringAfterLast('/')} at $date"
+        }
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
     }
 
     private fun tagsStorageToDisplay(value: String): String {
@@ -373,15 +627,20 @@ class GitHubApi(private val token: String) {
     }
 
     private fun normalizeTagsForStorage(input: String): String {
+<<<<<<< HEAD
         val tags = input.split(',')
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .distinct()
+=======
+        val tags = input.split(',').map { it.trim() }.filter { it.isNotBlank() }.distinct()
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
         if (tags.isEmpty()) return ""
         val safe = tags.map { it.replace("'", "\\'") }
         return safe.joinToString(prefix = "['", separator = "', '", postfix = "']")
     }
 
+<<<<<<< HEAD
     private fun contentsUrl(path: String, includeRef: Boolean = true): String {
         val base = "https://api.github.com/repos/${encodeSegment(RepoConfig.OWNER)}/${encodeSegment(RepoConfig.REPO)}/contents"
         val withPath = if (path.isBlank()) base else "$base/${encodePath(path)}"
@@ -397,6 +656,52 @@ class GitHubApi(private val token: String) {
         value,
         StandardCharsets.UTF_8.name(),
     ).replace("+", "%20")
+=======
+    private fun normalizeFileName(input: String): String {
+        var name = input.trim()
+        require(name.isNotEmpty()) { "File name is required." }
+        require('/' !in name && '\\' !in name) { "Enter a file name only, not a path." }
+        if (!name.endsWith(".json", ignoreCase = true)) name += ".json"
+        require(name.length <= 120) { "File name is too long." }
+        return name
+    }
+
+    private fun currentDateTime(): String = LocalDateTime.now().format(DateTimeFormatter.ofPattern("d/M/yy @ HH:mm"))
+
+    private fun getFile(path: String): GitHubFile {
+        val response = request("GET", contentsUrl(path))
+        val json = JSONObject(response)
+        val encoded = json.getString("content").replace("\n", "")
+        val decoded = Base64.decode(encoded, Base64.DEFAULT).toString(Charsets.UTF_8)
+        return GitHubFile(json.getString("path"), json.getString("sha"), decoded)
+    }
+
+    private fun putFile(path: String, newText: String, previousSha: String?, message: String) {
+        val body = JSONObject().apply {
+            put("message", message)
+            put("content", Base64.encodeToString(newText.toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
+            put("branch", settings.branch)
+            if (previousSha != null) put("sha", previousSha)
+        }
+        request("PUT", contentsUrl(path, includeRef = false), body.toString())
+    }
+
+    private fun serialize(root: Any): String = when (root) {
+        is JSONArray -> root.toString(2) + "\n"
+        is JSONObject -> root.toString(2) + "\n"
+        else -> error("Unsupported JSON root")
+    }
+
+    private fun contentsUrl(path: String, includeRef: Boolean = true): String {
+        val base = "https://api.github.com/repos/${encodeSegment(settings.owner)}/${encodeSegment(settings.repo)}/contents"
+        val withPath = if (path.isBlank()) base else "$base/${encodePath(path)}"
+        return if (includeRef) "$withPath?ref=${encodeSegment(settings.branch)}" else withPath
+    }
+
+    private fun encodePath(path: String): String = path.split('/').filter { it.isNotBlank() }.joinToString("/") { encodeSegment(it) }
+
+    private fun encodeSegment(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
 
     private fun request(method: String, url: String, body: String? = null): String {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -412,6 +717,7 @@ class GitHubApi(private val token: String) {
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
             }
         }
+<<<<<<< HEAD
 
         try {
             if (body != null) {
@@ -432,6 +738,16 @@ class GitHubApi(private val token: String) {
                 }
                 val detail = if (apiMessage.isNotBlank()) apiMessage else "GitHub returned HTTP $status"
                 throw GitHubHttpException(status, detail)
+=======
+        try {
+            if (body != null) connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (status !in 200..299) {
+                val apiMessage = try { JSONObject(response).optString("message") } catch (_: Exception) { "" }
+                throw GitHubHttpException(status, apiMessage.ifBlank { "GitHub returned HTTP $status" })
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
             }
             return response
         } finally {

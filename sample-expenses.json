@@ -1,5 +1,6 @@
 [
   {
+<<<<<<< HEAD
     "date": "3/7/26 @ 14:05",
     "price": "12.5",
     "ticker": "FD",
@@ -11,6 +12,19 @@
     "price": "+50",
     "ticker": "BVG",
     "description": "Example incoming value",
+=======
+    "date": "27/7/26 @ 09:10",
+    "price": "12.5",
+    "ticker": "FD",
+    "description": "Breakfast",
+    "tags": "['non_cash', 'food']"
+  },
+  {
+    "date": "27/7/26 @ 18:40",
+    "price": "+50",
+    "ticker": "REFUND",
+    "description": "Refund",
+>>>>>>> 4ed6b6d (add statistics, settings, theme selection)
     "tags": "['cashback']"
   }
 ]
