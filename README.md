@@ -1,8 +1,33 @@
+<img width="270" height="600" alt="Screenshot_2026-07-27-12-18-33-819_com example exp_tracker" src="https://github.com/user-attachments/assets/f6872adc-246d-423b-be1a-19ec83de9ff0" />
+<img width="270" height="600" alt="Screenshot_2026-07-27-12-18-28-953_com example exp_tracker" src="https://github.com/user-attachments/assets/579140af-2640-48b4-b2e6-6a7e0f53b513" />
+
 # exp_tracker
 
 Minimal Android expense editor backed directly by JSON files in a GitHub repository.
 
 The app uses GitHub's REST Contents API. A write replaces the selected JSON file using its latest SHA, and GitHub creates the commit directly on `main`. No Git executable or local `.git` directory is stored on the phone.
+
+# Installation
+1. Create your own GitHub repository, and ensure it is private, and your GitHub PAT is initialized
+2. Within the GitHub repository, initialize a folder within, it can be anything, I personally created `Financial/`
+3. Within the folder, create your first expenses `.json`. It track any .json file under `Financial/`, I personally name it this way `@MMMM_expenses.json`
+4. For the template, copy and paste this into the expenses file:
+```
+[
+  {
+    "date": "Test",
+    "price": "999",
+    "code": "Food",
+    "description": "coffee"
+  }
+]
+```
+5. Ensure every changes it commited, now git clone this repository on your Android Studio `git clone https://github.com/3oFiz4/exp_tracker`
+6. Go to `app/src/main/java/com/example/exp_tracker/RepoConfig.kt` and modify the configuration, as to what we did before.
+7. Build the application via command line
+8. Install the apk
+9. When you open the app for the first time, it will require you to input your GitHub PAT, copy your GitHub PAT and paste it there. This is the "password" or "token" to access your repository, because it is private.
+10. Wait for a minute, and the file will be loaded
 
 ## Current behavior
 
