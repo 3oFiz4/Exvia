@@ -1,14 +1,5 @@
 package com.example.exp_tracker
 
-<<<<<<< HEAD
-data class ExpenseRow(
-    val price: String,
-    val ticker: String,
-    val description: String,
-    val tags: String,
-    val date: String,
-    val originalIndex: Int,
-=======
 data class DynamicRow(
     val values: LinkedHashMap<String, String>,
     val originalIndex: Int,
@@ -22,7 +13,6 @@ data class TableData(
     val moneyKey: String?,
     val tickerKey: String?,
     val tagsKey: String?,
->>>>>>> 4ed6b6d (add statistics, settings, theme selection)
 )
 
 data class GitHubFile(
@@ -37,8 +27,6 @@ data class RepoFile(
     val sha: String,
 )
 
-<<<<<<< HEAD
-=======
 data class RepoSettings(
     val owner: String,
     val repo: String,
@@ -99,7 +87,6 @@ data class RepoSettings(
     private fun normalizeKey(value: String): String = value.lowercase().filter { it.isLetterOrDigit() || it == '_' }
 }
 
->>>>>>> 4ed6b6d (add statistics, settings, theme selection)
 class GitHubHttpException(
     val statusCode: Int,
     message: String,
