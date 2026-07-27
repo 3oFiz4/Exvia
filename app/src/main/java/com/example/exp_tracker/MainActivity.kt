@@ -5,8 +5,11 @@ import android.app.AlertDialog
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.os.Bundle
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -69,6 +72,8 @@ class MainActivity : Activity() {
     private lateinit var dynamicForm: LinearLayout
     private lateinit var table: TableLayout
     private lateinit var filesList: LinearLayout
+    private lateinit var filterInput: EditText
+    private lateinit var filterToggle: TextView
     private lateinit var amendButton: Button
     private lateinit var createFileButton: Button
     private lateinit var removeFileButton: Button
@@ -102,6 +107,8 @@ class MainActivity : Activity() {
     private var currentData = TableData(emptyList(), emptyList(), null, null, null, null)
     private var activeTab = Tab.TABLE
     private var busy = false
+    private var filterEnabled = false
+    private var filterQuery = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -181,9 +188,9 @@ class MainActivity : Activity() {
         tableTabButton = styledButton("Table").apply { setOnClickListener { showTab(Tab.TABLE) } }
         statTabButton = styledButton("Stat").apply { setOnClickListener { showTab(Tab.STAT) } }
         filesTabButton = styledButton("Files").apply { setOnClickListener { showTab(Tab.FILES) } }
-        tabs.addView(tableTabButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(2) })
-        tabs.addView(statTabButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(2) })
-        tabs.addView(filesTabButton, LinearLayout.LayoutParams(0, dp(48), 1f))
+        tabs.addView(tableTabButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(2) })
+        tabs.addView(statTabButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(2) })
+        tabs.addView(filesTabButton, LinearLayout.LayoutParams(0, dp(40), 1f))
         content.addView(tabs, matchWidth())
         drawerRoot.addView(content, frameMatch())
 
@@ -226,7 +233,44 @@ class MainActivity : Activity() {
         addView(addField, matchWidth())
 
         amendButton = styledButton("Amend").apply { setOnClickListener { amend() } }
-        addView(amendButton, spacedMatchWidth(10))
+        addView(amendButton, spacedMatchWidth(4))
+
+        val filterRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10), 0, dp(6))
+        }
+        filterInput = styledInput("SELECT * WHERE …").apply {
+            minHeight = dp(30)
+            maxHeight = dp(30)
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            textSize = 12f
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    filterQuery = s?.toString().orEmpty()
+                    if (filterEnabled) applyFilterAndRender(showStatus = false)
+                }
+                override fun afterTextChanged(s: Editable?) = Unit
+            })
+        }
+        filterToggle = TextView(this@MainActivity).apply {
+            text = "Filter OFF"
+            gravity = Gravity.CENTER
+            setTextColor(MUTED)
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            minHeight = dp(30)
+            AppFonts.apply(this, bold = true)
+            background = inactiveActionBackground(PRIMARY)
+            setOnClickListener {
+                filterEnabled = !filterEnabled
+                updateFilterToggle()
+                applyFilterAndRender(showStatus = true)
+            }
+        }
+        filterRow.addView(filterInput, LinearLayout.LayoutParams(0, dp(30), 1f).apply { marginEnd = dp(5) })
+        filterRow.addView(filterToggle, LinearLayout.LayoutParams(dp(94), dp(30)))
+        addView(filterRow, matchWidth())
 
         table = TableLayout(this@MainActivity).apply {
             isStretchAllColumns = false
@@ -529,9 +573,32 @@ class MainActivity : Activity() {
     private fun applyTableData(data: TableData) {
         currentData = data
         renderDynamicForm(data)
+        applyFilterAndRender(showStatus = false)
+        if (::drawerRoot.isInitialized) AppFonts.applyToTree(drawerRoot)
+    }
+
+    private fun applyFilterAndRender(showStatus: Boolean) {
+        val result = if (filterEnabled && filterQuery.isNotBlank()) SqlLikeFilter.apply(currentData, filterQuery) else SqlLikeFilter.FilterResult(currentData.rows)
+        val data = if (result.error == null) currentData.copy(rows = result.rows) else currentData.copy(rows = emptyList())
         renderTable(data)
         renderStats(data)
-        if (::drawerRoot.isInitialized) AppFonts.applyToTree(drawerRoot)
+        if (::filterInput.isInitialized) {
+            filterInput.setTextColor(if (result.error == null) WHITE else RED)
+        }
+        if (showStatus || result.error != null) {
+            statusText.text = when {
+                result.error != null -> "Filter error: ${result.error}"
+                filterEnabled -> "Filter enabled: showing ${data.rows.size}/${currentData.rows.size} row(s)."
+                else -> "Filter disabled: showing ${currentData.rows.size} row(s)."
+            }
+        }
+    }
+
+    private fun updateFilterToggle() {
+        if (!::filterToggle.isInitialized) return
+        filterToggle.text = if (filterEnabled) "Filter ON" else "Filter OFF"
+        filterToggle.setTextColor(if (filterEnabled) PRIMARY else MUTED)
+        filterToggle.background = if (filterEnabled) activeButtonBackground(PRIMARY) else inactiveActionBackground(PRIMARY)
     }
 
     private fun renderDynamicForm(data: TableData, preserved: Map<String, String> = emptyMap()) {
@@ -641,8 +708,7 @@ class MainActivity : Activity() {
                     tagsKey = settings.detectTagsKey(newData.keys),
                 )
                 renderDynamicForm(currentData, preserved)
-                renderTable(currentData)
-                renderStats(currentData)
+                applyFilterAndRender(showStatus = false)
                 dialog.dismiss()
             }
         }
@@ -653,21 +719,31 @@ class MainActivity : Activity() {
         val path = selectedPath ?: run { statusText.text = "Select or create a JSON file first."; showTab(Tab.FILES); return }
         val token = requireToken() ?: return
         val values = collectFormValues()
-        setBusy(true, "Committing to ${path.substringAfterLast('/')}…")
-        executor.execute {
-            try {
-                val api = GitHubApi(token, settings)
-                val date = api.appendRow(path, values)
-                val data = api.fetchTable(path)
-                runOnUiThread {
-                    applyTableData(data)
-                    statusText.text = "Committed at $date."
-                    setBusy(false)
+        val preview = values.entries.filter { it.value.isNotBlank() }.take(8).joinToString("\n") { "${it.key}: ${it.value}" }
+            .ifBlank { "All fields are blank; the repository writer may only add an inferred date." }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Amend expense?")
+            .setMessage("$preview\n\nCommit this change to ${path.substringAfterLast('/')}?")
+            .setNegativeButton("No", null)
+            .setPositiveButton("Yes") { _, _ ->
+                setBusy(true, "Committing to ${path.substringAfterLast('/')}…")
+                executor.execute {
+                    try {
+                        val api = GitHubApi(token, settings)
+                        val date = api.appendRow(path, values)
+                        val data = api.fetchTable(path)
+                        runOnUiThread {
+                            applyTableData(data)
+                            statusText.text = "Committed at $date."
+                            setBusy(false)
+                        }
+                    } catch (e: Exception) {
+                        runOnUiThread { handleError(e, "Amend failed") }
+                    }
                 }
-            } catch (e: Exception) {
-                runOnUiThread { handleError(e, "Amend failed") }
             }
-        }
+            .create()
+        showDialog(dialog)
     }
 
     private fun collectFormValues(): LinkedHashMap<String, String> = linkedMapOf<String, String>().apply {
@@ -805,6 +881,26 @@ class MainActivity : Activity() {
                 graph.view?.let { container.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340))) }
                 graph.legend?.let { container.addView(infoText(it).apply { setTextColor(MUTED) }, matchWidth()) }
 
+                if (key == data.moneyKey) {
+                    container.addView(infoText("Cumulative $key").apply {
+                        setTextColor(STAT_MEDIAN)
+                        setPadding(dp(6), dp(12), dp(6), dp(5))
+                        AppFonts.apply(this, bold = true)
+                    }, matchWidth())
+                    val accumulation = buildAccumulationPlot(data, key)
+                    accumulation.view?.let { container.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(230))) }
+                    accumulation.legend?.let { container.addView(infoText(it).apply { setTextColor(MUTED) }, matchWidth()) }
+
+                    container.addView(infoText("Normal distribution of $key").apply {
+                        setTextColor(STAT_QUARTILE)
+                        setPadding(dp(6), dp(12), dp(6), dp(5))
+                        AppFonts.apply(this, bold = true)
+                    }, matchWidth())
+                    val normal = buildNormalPlot(data, key)
+                    normal.view?.let { container.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(230))) }
+                    normal.legend?.let { container.addView(infoText(it).apply { setTextColor(MUTED) }, matchWidth()) }
+                }
+
                 addStatisticMetric(container, "Mean", stats.mean, STAT_MEAN)
                 addStatisticMetric(container, "Median", stats.median, STAT_MEDIAN)
                 addStatisticMetric(container, "Mean − Median gap", stats.meanMedianGap, if ((stats.meanMedianGap ?: 0.0) < 0.0) RED else GREEN)
@@ -870,8 +966,38 @@ class MainActivity : Activity() {
         val omissionText = if (omitted.isBlank()) "" else " Omitted: $omitted."
         return GraphResult(
             view,
-            "Timestamp totals: rows sharing an exact datetime are summed before statistics; ${datedNumeric.size} numeric row(s) became ${series.size} timestamp observation(s). Real gaps in dates are preserved. Q1–Q3 = solid box · green when current total > previous total, otherwise red · first box neutral · median = solid contrast line · mean = dotted contrast line · whiskers = mean ± 1σ and follow box color · hollow ○ = Tukey outlier · blue ■ = total at that datetime.$omissionText Tap a box to inspect; pinch to zoom; drag to pan; double-tap to reset.",
+            "Timestamp totals: rows sharing an exact datetime are summed before statistics; ${datedNumeric.size} numeric row(s) became ${series.size} timestamp observation(s). Real gaps in dates are preserved. Q1–Q3 = solid box · green when current total > previous total, otherwise red · first box neutral · median = solid contrast line · mean = dotted contrast line · whiskers = mean ± 1σ and follow box color · tiny red hollow ○ = Tukey outlier · blue ◆ = total at that datetime · translucent blue path = timestamp totals.$omissionText Tap a box to inspect; pinch to zoom; drag to pan; double-tap to reset.",
         )
+    }
+
+    private data class SimplePlotResult(val view: InteractiveLinePlotView?, val legend: String?)
+
+    private fun buildAccumulationPlot(data: TableData, key: String): SimplePlotResult {
+        val dateKey = data.dateKey ?: return SimplePlotResult(null, "No date key detected for cumulative timeline.")
+        val dated = data.rows.mapNotNull { row ->
+            val x = Statistics.parseDate(row.values[dateKey].orEmpty()) ?: return@mapNotNull null
+            val y = Statistics.parseNumber(row.values[key].orEmpty()) ?: return@mapNotNull null
+            x to y
+        }
+        if (dated.isEmpty()) return SimplePlotResult(null, "No dated numeric $key values in the current dataset.")
+        val series = Statistics.cumulativeTotalSeries(dated)
+        val view = InteractiveLinePlotView(this).apply {
+            setPalette(BLACK, MUTED, WHITE, SURFACE, Color.rgb(61, 139, 255))
+            setSeries(series.map { it.first.toDouble() to it.second }, InteractiveLinePlotView.AxisKind.TIME)
+        }
+        return SimplePlotResult(view, "Running sum of timestamp-level $key totals. Filtering changes this plot. Pinch to zoom, drag to pan, double-tap to reset.")
+    }
+
+    private fun buildNormalPlot(data: TableData, key: String): SimplePlotResult {
+        val values = data.rows.mapNotNull { Statistics.parseNumber(it.values[key].orEmpty()) }
+        if (values.isEmpty()) return SimplePlotResult(null, "No numeric $key values in the current dataset.")
+        val curve = Statistics.normalDistribution(values)
+        val view = InteractiveLinePlotView(this).apply {
+            setPalette(BLACK, MUTED, WHITE, SURFACE, STAT_QUARTILE)
+            setSeries(curve, InteractiveLinePlotView.AxisKind.NUMBER, rugSamples = values)
+        }
+        val note = if (values.distinct().size <= 1) " All values are identical, so σ = 0 and the fitted distribution collapses to one point." else ""
+        return SimplePlotResult(view, "Fitted normal PDF from the current $key subset; bottom ticks show observed values.$note Pinch to zoom, drag to pan, double-tap to reset.")
     }
 
     private fun accordion(title: String, initiallyOpen: Boolean = false, build: (LinearLayout) -> Unit): LinearLayout {
@@ -890,23 +1016,16 @@ class MainActivity : Activity() {
             text = if (initiallyOpen) "▾ $title" else "▸ $title"
             textSize = 17f
             setTextColor(if (initiallyOpen) PRIMARY else WHITE)
-            setPadding(dp(12), dp(12), dp(12), dp(12))
-            background = GradientDrawable().apply {
-                setColor(SURFACE)
-                setStroke(dp(1).coerceAtLeast(1), if (initiallyOpen) PRIMARY else SECONDARY)
-                cornerRadius = dp(3).toFloat()
-            }
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            minHeight = dp(38)
+            background = if (initiallyOpen) activeButtonBackground(PRIMARY) else noBorderBackground()
             AppFonts.apply(this, bold = true)
             setOnClickListener {
                 val opening = content.visibility != View.VISIBLE
                 content.visibility = if (opening) View.VISIBLE else View.GONE
                 text = if (opening) "▾ $title" else "▸ $title"
                 setTextColor(if (opening) PRIMARY else WHITE)
-                background = GradientDrawable().apply {
-                    setColor(SURFACE)
-                    setStroke(dp(1).coerceAtLeast(1), if (opening) PRIMARY else SECONDARY)
-                    cornerRadius = dp(3).toFloat()
-                }
+                background = if (opening) activeButtonBackground(PRIMARY) else noBorderBackground()
             }
         }
         wrapper.addView(header, matchWidth())
@@ -1107,7 +1226,7 @@ class MainActivity : Activity() {
     private fun styleTab(button: Button, active: Boolean) {
         val accent = if (active) PRIMARY else SECONDARY
         button.setTextColor(if (active) PRIMARY else MUTED)
-        button.background = buttonBackground(accent)
+        button.background = if (active) activeButtonBackground(accent) else noBorderBackground()
         AppFonts.apply(button, bold = active)
     }
 
@@ -1167,14 +1286,20 @@ class MainActivity : Activity() {
         dialog.window?.decorView?.let { AppFonts.applyToTree(it) }
         dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.let {
             it.setTextColor(PRIMARY)
+            it.background = inactiveActionBackground(PRIMARY)
+            it.minHeight = dp(36)
             AppFonts.apply(it, bold = true)
         }
         dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.let {
             it.setTextColor(MUTED)
+            it.background = inactiveActionBackground(SECONDARY)
+            it.minHeight = dp(36)
             AppFonts.apply(it)
         }
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.let {
             it.setTextColor(MUTED)
+            it.background = inactiveActionBackground(SECONDARY)
+            it.minHeight = dp(36)
             AppFonts.apply(it)
         }
     }
@@ -1204,25 +1329,35 @@ class MainActivity : Activity() {
     private fun styledButton(label: String, accent: Int = PRIMARY): Button = Button(this).apply {
         text = label
         isAllCaps = false
-        setTextColor(Color.WHITE)
-        setBackgroundColor(Color.BLACK)
-        background = buttonBackground(accent)
-        setPadding(dp(12), dp(8), dp(12), dp(8))
-        minHeight = dp(46)
+        setTextColor(WHITE)
+        background = inactiveActionBackground(accent)
+        setPadding(dp(10), dp(4), dp(10), dp(4))
+        minHeight = dp(38)
+        minimumHeight = dp(38)
         AppFonts.apply(this, bold = true)
     }
 
-    private fun buttonBackground(strokeColor: Int): GradientDrawable = GradientDrawable().apply {
-        setColor(Color.BLACK)
-        setStroke(dp(1).coerceAtLeast(1), strokeColor)
+    /** No border at rest; focus/press/selected is the active visual state. */
+    private fun inactiveActionBackground(accent: Int): StateListDrawable = StateListDrawable().apply {
+        addState(intArrayOf(android.R.attr.state_pressed), activeButtonBackground(accent))
+        addState(intArrayOf(android.R.attr.state_focused), activeButtonBackground(accent))
+        addState(intArrayOf(android.R.attr.state_selected), activeButtonBackground(accent))
+        addState(intArrayOf(), noBorderBackground())
+    }
+
+    private fun noBorderBackground(): GradientDrawable = GradientDrawable().apply {
+        setColor(BLACK)
         cornerRadius = dp(3).toFloat()
     }
 
-    private fun outlinedBackground(selected: Boolean, strokeColor: Int = if (selected) PRIMARY else SECONDARY): GradientDrawable = GradientDrawable().apply {
+    private fun activeButtonBackground(strokeColor: Int): GradientDrawable = GradientDrawable().apply {
         setColor(BLACK)
         setStroke(dp(1).coerceAtLeast(1), strokeColor)
         cornerRadius = dp(3).toFloat()
     }
+
+    private fun outlinedBackground(selected: Boolean, strokeColor: Int = if (selected) PRIMARY else SECONDARY): GradientDrawable =
+        if (selected) activeButtonBackground(strokeColor) else noBorderBackground()
 
     private fun isLightPalette(value: ThemePalette): Boolean {
         val color = value.tertiaryColor()

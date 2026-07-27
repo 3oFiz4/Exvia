@@ -1,231 +1,290 @@
-<img width="216" height="480" alt="Screenshot_2026-07-27-18-46-49-277_com example exp_tracker" src="https://github.com/user-attachments/assets/e417c56f-1fd5-41bd-bbe3-1b6430d128b8" />
-<img width="216" height="480" alt="Screenshot_2026-07-27-18-46-44-433_com example exp_tracker" src="https://github.com/user-attachments/assets/8ade00a9-a140-4b4d-a73f-02d709558bd1" />
-<img width="216" height="480" alt="Screenshot_2026-07-27-18-46-21-522_com example exp_tracker" src="https://github.com/user-attachments/assets/d891fdde-f4d8-4d39-9374-05e0fcfaaaa9" />
-<img width="216" height="480" alt="Screenshot_2026-07-27-18-46-11-768_com example exp_tracker" src="https://github.com/user-attachments/assets/88162336-62d9-4f94-9b5e-76b800f04b45" />
-<img width="216" height="480" alt="Screenshot_2026-07-27-18-44-56-760_com example exp_tracker" src="https://github.com/user-attachments/assets/5de0cf18-48ee-4b0e-8f8e-bc3c10aa9d82" />
-<img width="216" height="480" alt="Screenshot_2026-07-27-18-45-19-762_com example exp_tracker" src="https://github.com/user-attachments/assets/62b28dcd-f8dd-453f-bcc6-f73cb62cbb11" />
+# exp_tracker v1.8
 
+Minimal schema-driven Android JSON expense editor backed by GitHub. The app dynamically infers fields from the selected JSON file, supports CRUD/file management, configurable themes/repository settings, autocomplete, filtering, finance statistics, and interactive plots.
 
-# exp_tracker
+## v1.8 changes
 
-Minimal Android expense editor backed directly by JSON files in a GitHub repository.
+### Graph styling
 
-The app uses GitHub's REST Contents API. A write replaces the selected JSON file using its latest SHA, and GitHub creates the commit directly on `main`. No Git executable or local `.git` directory is stored on the phone.
+The cumulative statistical timeline still groups rows by exact parsed datetime before computing statistics. If several rows share `3/7/26 @ 10:00`, their numeric values are summed and that sum becomes the observation for that timestamp.
 
-# Installation
-1. Create your own GitHub repository, and ensure it is private, and your GitHub PAT is initialized
-2. Within the GitHub repository, initialize a folder within, it can be anything, I personally created `Financial/`
-3. Within the folder, create your first expenses `.json`. It track any .json file under `Financial/`, I personally name it this way `@MMMM_expenses.json`
-4. For the template, copy and paste this into the expenses file:
-```
-[
-  {
-    "date": "Test",
-    "price": "999",
-    "code": "Food",
-    "description": "coffee"
-  }
-]
-```
-5. Ensure every changes it commited, now git clone this repository on your Android Studio `git clone https://github.com/3oFiz4/exp_tracker`
-6. Go to `app/src/main/java/com/example/exp_tracker/RepoConfig.kt` and modify the configuration, as to what we did before.
-7. Build the application via command line
-8. Install the apk
-9. When you open the app for the first time, it will require you to input your GitHub PAT, copy your GitHub PAT and paste it there. This is the "password" or "token" to access your repository, because it is private.
-10. Wait for a minute, and the file will be loaded
+For each cumulative snapshot:
 
-## Current behavior
+- Q1→Q3 is an opaque box.
+- Current timestamp total `>` previous total: green box + whiskers.
+- Current timestamp total `<=` previous total: red box + whiskers.
+- First box is neutral because it has no prior observation.
+- Median is a solid high-contrast horizontal line.
+- Mean is a dotted high-contrast horizontal line.
+- Whiskers are `mean ± 1 population σ`.
+- Tukey outliers (`Q1 - 1.5×IQR`, `Q3 + 1.5×IQR`) are **tiny red hollow circles**.
+- The actual aggregated timestamp observation is a **blue, slightly wide rhombus/diamond**.
+- A **40%-opacity blue line** connects the timestamp observations from left to right.
+- Extra X padding is reserved so the first and last box/observation are not half-clipped by the plot bounds.
+- Missing dates are not synthesized. Real time gaps remain real gaps.
+- X labels wrap as `d/M/yy` above `HH:mm` and are thinned when necessary.
 
-- AMOLED UI: `#000000` background and `#FFFFFF` base text.
-- Bottom tabs: **Table** and **Files**.
-- Table displays only the currently selected JSON file from `Financial/`.
-- Columns: DATE, PRICE, TICKER, DESCRIPTION, TAGS.
-- New rows use the Android device's local date/time in `d/M/yy @ HH:mm`, for example `3/7/26 @ 14:05`.
-- Existing dates such as `3/7/26` remain supported and sortable.
-- Table order is newest -> oldest. A date without a time is treated as midnight for sorting.
-- A price beginning with `+` is green. A price without `+` is red.
-- Row create/edit/delete and file create/delete commit directly to GitHub.
-- TICKER, DESCRIPTION, and TAGS provide autocomplete learned from the currently selected file.
-- Autocomplete suggestions are ranked by how often a value appears.
-- Tags are edited as `non_cash, food, big`, but stored in the repository as the string `['non_cash', 'food', 'big']`.
-- Ticker/category colors are configurable in `RepoConfig.kt`.
-- Table rows use one physical pixel of spacing.
+The box plot remains interactive: pinch to zoom, drag to pan, double-tap to reset, and tap a box to inspect its cumulative values.
 
-## 1. Configure the repository
+### Additional PRICE plots
 
-Open:
+When a money-like key such as `PRICE`, `amount`, or `cost` is inferred, its Stat accordion also includes:
 
-`app/src/main/java/com/example/exp_tracker/RepoConfig.kt`
+1. **Cumulative PRICE** — an interactive running sum over timestamp-level totals.
+2. **Normal distribution of PRICE** — an interactive fitted normal probability-density curve using the currently displayed numeric PRICE subset. Small ticks at the bottom show the observed PRICE samples.
 
-Set:
+These plots use the same filtered dataset as the table and all statistics.
 
-```kotlin
-const val OWNER = "YOUR_GITHUB_USERNAME_OR_ORG"
-const val REPO = "YOUR_REPOSITORY"
-const val BRANCH = "main"
-const val EXPENSE_FOLDER = "Financial"
-const val DEFAULT_JSON = "expenses.json"
+### Table filtering
+
+A compact filter row appears directly below **Amend**, separated by a margin to reduce accidental taps. It contains a one-line query field and `Filter ON/OFF` control.
+
+When filtering is ON, the filtered subset replaces the table **and** becomes the source for Stat, Personal finance, cumulative plots, normal-distribution plots, and per-key metrics. Turning filtering OFF immediately restores the original selected JSON dataset.
+
+The filter accepts a SQLite-style WHERE subset. You can type the full compact form:
+
+```sql
+SELECT * WHERE price >= 10 AND ticker = 'FD'
 ```
 
-The Files tab lists `.json` files directly inside `Financial/`. Selecting one makes it the active Table file and the destination for **Amend**.
+or only the WHERE expression:
 
-## 2. Configure ticker colors
-
-```kotlin
-val TICKER_COLORS = mapOf(
-    "FD" to "#FFB300",
-    "BVG" to "#29B6F6",
-)
-const val DEFAULT_TICKER_COLOR = "#FFFFFF"
+```sql
+price >= 10 AND ticker = 'FD'
 ```
 
-Matching is case-insensitive.
+Also accepted:
 
-## 3. JSON format
+```sql
+SELECT * FROM rows WHERE description LIKE '%coffee%'
+SELECT * WHERE ticker IN ('FD', 'BVG')
+SELECT * WHERE tags IS NOT NULL
+SELECT * WHERE REGEX(description, '(?i)food|lunch')
+SELECT * WHERE description REGEXP '(?i)coffee|tea'
+SELECT * WHERE NOT (ticker = 'FD' OR price < 5)
+```
+
+Supported filter features:
+
+- `AND`, `OR`, `NOT`, parentheses
+- `=`, `!=`, `<>`, `>`, `>=`, `<`, `<=`
+- `LIKE` with `%` and `_`
+- `IN (...)`
+- `IS NULL`, `IS NOT NULL`
+- `REGEX(value, pattern)` / `REGEXP(value, pattern)`
+- `column REGEX 'pattern'` / `column REGEXP 'pattern'`
+- quoted strings
+- backtick or `[bracket]` quoted column names
+
+This is intentionally a safe WHERE-expression evaluator over the loaded JSON rows, not an arbitrary SQLite execution console: it does not execute mutations, JOINs, DDL, subqueries, GROUP BY, etc. Numeric-looking values compare numerically; other values compare as case-insensitive strings.
+
+If an enabled query is syntactically invalid, the table/stat subset is temporarily empty and the status area reports the filter error rather than silently showing unfiltered data.
+
+### Amend confirmation
+
+**Amend** now opens a Yes/No confirmation dialog with a preview of the nonblank values before any GitHub write occurs.
+
+### Button treatment
+
+Buttons are shorter and visually quieter:
+
+- no border while idle
+- black/theme-background surface remains unchanged
+- a border appears only for an active state such as pressed/focused/selected
+- active bottom tab, selected file, enabled filter, and expanded accordion keep an active border
+- collapsed accordions and inactive navigation have text only, with no outline
+
+Dialog buttons use the same compact active-on-focus/press treatment.
+
+### Font
+
+The intended font is **JetBrains**, not JetRoboto.
+
+Place your TTF at:
+
+```text
+app/src/main/assets/fonts/JetBrains.ttf
+```
+
+If absent, the app falls back to Android sans-serif so the project remains buildable.
+
+## Existing schema-driven behavior
+
+The app does not hardcode PRICE/TICKER/DESCRIPTION/TAGS fields. Inputs and table columns are inferred from the union of object keys in the selected JSON file. Every field is optional.
 
 Example:
 
 ```json
 [
-  {
-    "date": "3/7/26 @ 14:05",
-    "price": "12.5",
-    "ticker": "FD",
-    "description": "Lunch",
-    "tags": "['non_cash', 'food']"
-  },
-  {
-    "date": "3/7/26",
-    "price": "+50",
-    "ticker": "REFUND",
-    "description": "Refund",
-    "tags": "['cashback']"
-  }
+  {"name":"A","tor":"1","legend":"x"},
+  {"name":"B","tor":"2","legend":"y"}
 ]
 ```
 
-The app also accepts an object containing an `expenses` array.
+produces inputs/table columns for `name`, `tor`, and `legend`.
 
-Existing numeric `price` values are readable. New/edited prices are strings so an explicit leading `+` can be preserved.
+For a new empty `[]` file, use **+ Add field** to seed a schema.
 
-For tags, the expected repository value is a JSON string containing a Python-style list:
+Common key names still receive special behavior automatically:
 
-```json
-"tags": "['non_cash', 'food', 'big']"
-```
+- date: `date`, `datetime`, `timestamp`, `time`, `created_at`, ...
+- money: `price`, `amount`, `cost`, `expense`, `value`, `total`, `money`
+- ticker/category: `ticker`, `category`, `code`, `type`
+- tags: `tags`, `tag`, `labels`, `label`
 
-The app displays that as:
+Each can be overridden in Settings.
+
+## Dates
+
+Existing values such as:
 
 ```text
-non_cash, food, big
+3/7/26
 ```
 
-It also tolerates a real JSON array for reading, such as `"tags": ["non_cash", "food"]`; editing the row converts it to the string form above.
-
-Schema keys are configurable:
-
-```kotlin
-const val DATE_KEY = "date"
-const val PRICE_KEY = "price"
-const val TICKER_KEY = "ticker"
-const val DESCRIPTION_KEY = "description"
-const val TAGS_KEY = "tags"
-```
-
-## 4. Date and sorting
-
-New rows use local device time:
+and:
 
 ```text
 3/7/26 @ 14:05
 ```
 
-Supported sorting formats include:
+are parsed. New dated rows use local device time in `d/M/yy @ HH:mm` when the inferred date field is blank.
 
-- `3/7/26 @ 14:05`
-- `3/7/26`
-- older ISO timestamps written by previous app versions
+The table sorts newest → oldest when a date key is available. Sparse/missing dates do not break plotting; unparseable/missing dates are omitted from time plots and reported in their graph notes.
 
-A date-only row is interpreted as `00:00` on that date for sorting. Unparseable or blank dates go to the bottom.
+## Tags
 
-## 5. Autocomplete
+A tags value stored as:
 
-Autocomplete is rebuilt whenever the selected JSON file loads or changes.
-
-- **TICKER:** unique ticker values, most frequent first.
-- **DESCRIPTION:** unique descriptions, most frequent first.
-- **TAGS:** individual tags, most frequent first. Tags are comma-separated, so autocomplete continues after each comma.
-
-For example, if `FD` occurs 40 times and `BVG` occurs 10 times, `FD` is ranked before `BVG` in TICKER suggestions.
-
-Autocomplete is based only on the currently selected file, so each month's file can develop its own relevant suggestions.
-
-## 6. Amend behavior
-
-PRICE is required. TICKER, DESCRIPTION, and TAGS are optional.
-
-Accepted prices include `12`, `12.50`, `+12`, and `+12.50`. Negative prices are rejected.
-
-For a new row, the commit message remains:
-
-```text
-Expense at {{date}}: {{PRICE}}, ({{TICKER}}) {{DESCRIPTION}}
+```json
+"tags": "['non_cash', 'food', 'big']"
 ```
 
-Example:
+is displayed/edited as:
 
 ```text
-Expense at 3/7/26 @ 14:05: 12.5, (FD) Lunch
+non_cash, food, big
 ```
 
-Tags are stored in the row but intentionally do not change this commit-message format.
+and converted back to the repository string-list representation when written.
 
-## 7. Row CRUD
+## Autocomplete
 
-Create: enter PRICE and any optional TICKER/DESCRIPTION/TAGS, then press **Amend**.
+Autocomplete is inferred from values in the selected file and ranked by occurrence count. Ticker/category, descriptions, generic dynamic fields, and individual comma-separated tags can all use learned suggestions.
 
-Read: the selected file is parsed into the Table.
+## Statistics
 
-Update: tap any DATE, PRICE, TICKER, DESCRIPTION, or TAGS cell. The edit dialog supports the same autocomplete for ticker, description, and tags.
+Each key has an accordion containing applicable metrics:
 
-Delete: tap `×` and confirm.
+- Mean
+- Median
+- Mean − Median gap
+- Mode
+- Sum
+- STDV
+- Minimum
+- Maximum
+- Range
+- Q1 / Q2 / Q3
+- IQR
+- Skew
+- Kurtosis
+- n
+- n unique
+- Variance
 
-## 8. Files tab
+Negative numeric statistics are red; other statistic families use distinct semantic colors.
 
-The Files tab manages JSON files under `Financial/`.
+Implementation details:
 
-Selecting a file makes it active, loads only it into Table, and switches back to Table.
+- quartiles use linear interpolation at `p × (n - 1)`
+- variance/STDV are population measures (`/ n`)
+- skew is population standardized third moment
+- kurtosis is excess population kurtosis
 
-**Create** creates an empty JSON array. The suggested filename is next month as `YYYY-MM.json`; you can replace it with another name.
+Categorical keys retain useful Mode/n/n-unique results and do not receive meaningless ordinal box plots.
 
-**Remove selected** deletes the selected JSON file after confirmation.
+## Personal finance metrics
 
-## 9. GitHub token
+When a money key is inferred, the Personal finance accordion includes total income, total expenses, net cash flow, savings rate, averages, largest values, transaction count, date period, and category spending.
 
-Use a fine-grained personal access token with repository **Contents: Read and write** permission.
+Current sign convention:
 
-The app requests it at runtime and encrypts it using Android Keystore. Do not hardcode the token into the source.
+- `+50` = income/inflow
+- `50` = expense/outflow
 
-## 10. Build
+The table also colors explicit `+` money values green and ordinary money values red.
 
-1. Unzip the project.
-2. Open the project folder in Android Studio.
-3. Let Gradle sync.
-4. Set `RepoConfig.kt`.
-5. Build a debug APK with **Build -> Build Bundle(s) / APK(s) -> Build APK(s)**, or run:
+## Tabs and files
+
+Bottom tabs:
+
+- **Table** — schema-driven inputs, compact filter, table CRUD
+- **Stat** — finance metrics, cumulative box timeline, cumulative PRICE plot, normal PRICE distribution, per-key statistics
+- **Files** — select/create/remove `.json` files under the configured folder (default `Financial/`)
+
+Create suggests next month as `YYYY-MM.json`. File removal asks for confirmation. If the last file is removed, a missing Git folder is treated as an empty list so you can immediately create another JSON file.
+
+## Settings drawer
+
+Swipe left → right from the left edge, or tap `Settings ›`.
+
+Settings remain grouped into accordions:
+
+- **GitHub** — owner/org, repository, branch, JSON folder, default file, masked PAT
+- **Color** — theme preset plus six configurable palette roles
+- **Schema & Display** — inferred-key overrides and ticker/category color mappings
+
+The GitHub PAT is stored through Android Keystore and is never displayed back in plaintext. A stored PAT is shown only as a masked hint.
+
+Available theme presets:
+
+- Default theme
+- Ayu
+- Ayu-Light
+- Default theme-light
+
+Default six-role palette:
+
+```text
+Primary     #F72323
+Secondary   #CC0000
+Tertiary    #000000
+Quaternary  #1F1F1F
+Quinary     #7D7D7D
+Senary      #EDEDED
+```
+
+## GitHub writes
+
+The app uses GitHub's Contents API rather than embedding a Git client. File replacement with the latest SHA creates the repository commit directly on the configured branch.
+
+Use a fine-grained PAT with repository **Contents: Read and write** permission. Do not hardcode the token in source control.
+
+## Build
+
+Open the project folder in Android Studio, let Gradle sync, then run or build an APK.
+
+Windows:
 
 ```powershell
 .\gradlew.bat assembleDebug
 ```
 
-The APK is normally at:
+macOS/Linux:
+
+```bash
+./gradlew assembleDebug
+```
+
+Expected debug APK:
 
 ```text
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Minimum Android version: Android 8.0 / API 26.
+Minimum Android: API 26 / Android 8.0.
 
 ## Validation note
 
-This environment cannot download Gradle dependencies and does not have a configured Android SDK, so a definitive Android build could not be run here. Android Studio should perform the final SDK/AGP compilation on your machine.
+The new pure-Kotlin filtering/statistics logic was compiler-tested, including numeric comparisons, LIKE, IN, REGEX, duplicate-timestamp accumulation, and normal-curve generation. Kotlin source was also checked for syntax-level errors and the packaged project is integrity-checked. A full Android Gradle build cannot be completed in this environment because the Gradle distribution/Android SDK cannot be downloaded here; Android Studio on your machine remains the definitive full build check.

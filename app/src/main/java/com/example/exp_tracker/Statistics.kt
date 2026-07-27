@@ -6,6 +6,8 @@ import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlin.math.PI
+import kotlin.math.exp
 import kotlin.math.pow
 import kotlin.math.sqrt
 
@@ -127,8 +129,8 @@ object Statistics {
     fun cumulativeBoxSeries(points: List<Pair<Long, Double>>): List<CumulativeBoxPoint> {
         if (points.isEmpty()) return emptyList()
 
-        val buckets = points
-            .groupBy({ it.first }, { it.second })
+        val grouped = points.groupBy({ it.first }, { it.second })
+        val buckets = grouped
             .map { (x, values) -> Triple(x, values.sum(), values.size) }
             .sortedBy { it.first }
 
@@ -170,6 +172,41 @@ object Statistics {
                 sourceCount = sourceCount,
                 n = n,
             )
+        }
+    }
+
+
+    /** Sum all numeric values that share the exact parsed datetime. */
+    fun timestampTotals(points: List<Pair<Long, Double>>): List<Pair<Long, Double>> = points
+        .groupBy({ it.first }, { it.second })
+        .map { (x, values) -> x to values.sum() }
+        .sortedBy { it.first }
+
+    /** Running sum of timestamp-level totals. */
+    fun cumulativeTotalSeries(points: List<Pair<Long, Double>>): List<Pair<Long, Double>> {
+        var total = 0.0
+        return timestampTotals(points).map { (x, value) ->
+            total += value
+            x to total
+        }
+    }
+
+    /** Fitted normal probability-density curve for numeric observations. */
+    fun normalDistribution(values: List<Double>, sampleCount: Int = 121): List<Pair<Double, Double>> {
+        if (values.isEmpty()) return emptyList()
+        val mean = values.average()
+        val variance = values.sumOf { (it - mean).pow(2) } / values.size
+        val stdv = sqrt(variance)
+        if (stdv <= 0.0 || !stdv.isFinite()) return listOf(mean to 1.0)
+        val count = sampleCount.coerceAtLeast(21)
+        val minX = mean - 4.0 * stdv
+        val maxX = mean + 4.0 * stdv
+        val step = (maxX - minX) / (count - 1)
+        val scale = 1.0 / (stdv * sqrt(2.0 * PI))
+        return (0 until count).map { i ->
+            val x = minX + step * i
+            val z = (x - mean) / stdv
+            x to (scale * exp(-0.5 * z * z))
         }
     }
 

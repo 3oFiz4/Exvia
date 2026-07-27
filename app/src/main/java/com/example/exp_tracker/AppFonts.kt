@@ -9,7 +9,7 @@ import android.widget.TextView
 object AppFonts {
     private var cached: Typeface? = null
 
-    fun jetRoboto(context: Context): Typeface {
+    fun jetBrains(context: Context): Typeface {
         cached?.let { return it }
         val loaded = try {
             Typeface.createFromAsset(context.assets, "fonts/JetBrains.ttf")
@@ -21,7 +21,7 @@ object AppFonts {
     }
 
     fun apply(textView: TextView, bold: Boolean = false) {
-        val base = jetRoboto(textView.context)
+        val base = jetBrains(textView.context)
         textView.typeface = Typeface.create(base, if (bold) Typeface.BOLD else Typeface.NORMAL)
     }
 

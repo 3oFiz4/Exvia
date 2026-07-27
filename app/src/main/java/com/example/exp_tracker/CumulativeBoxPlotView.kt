@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.graphics.Path
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
@@ -26,7 +27,7 @@ import kotlin.math.min
  *  - mean: dotted high-contrast horizontal mark
  *  - mean ± 1 population standard deviation: red/green whisker + caps
  *  - Tukey outliers (outside Q1 - 1.5 IQR .. Q3 + 1.5 IQR): hollow circles
- *  - total numeric value at that timestamp: blue filled rectangle
+ *  - total numeric value at that timestamp: blue filled rhombus
  *
  * Box direction compares timestamp totals: green when current > previous, otherwise
  * red. The first timestamp is neutral because it has no prior observation.
@@ -46,6 +47,7 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
     }
     private val stdPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 1.8f; style = Paint.Style.STROKE }
     private val selectedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 2.5f; style = Paint.Style.STROKE }
+    private val trendPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 1.8f; style = Paint.Style.STROKE }
     private val outlierPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 1.8f; style = Paint.Style.STROKE }
     private val actualPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val actualOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 1.3f; style = Paint.Style.STROKE }
@@ -63,7 +65,7 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
     private val negativeColor = Color.rgb(247, 35, 35)
     private val positiveColor = Color.rgb(52, 199, 89)
     private val actualColor = Color.rgb(61, 139, 255)
-    private val outlierColor = Color.rgb(255, 179, 0)
+    private val outlierColor = Color.rgb(247, 35, 35)
     private val positiveContrast = Color.rgb(240, 255, 244)
     private val negativeContrast = Color.rgb(255, 240, 240)
 
@@ -110,8 +112,8 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
     })
 
     init {
-        textPaint.typeface = AppFonts.jetRoboto(context)
-        detailPaint.typeface = AppFonts.jetRoboto(context)
+        textPaint.typeface = AppFonts.jetBrains(context)
+        detailPaint.typeface = AppFonts.jetBrains(context)
         isClickable = true
         isFocusable = true
     }
@@ -159,6 +161,7 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
         detailPaint.color = textColorValue
         detailBackgroundPaint.color = withAlpha(backgroundColorValue, 232)
         selectedPaint.color = actualColor
+        trendPaint.color = withAlpha(actualColor, 102) // 40% alpha
         outlierPaint.color = outlierColor
         actualPaint.color = actualColor
         actualOutlinePaint.color = textColorValue
@@ -184,8 +187,13 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
         canvas.drawLine(left, top, left, bottom, axisPaint)
         canvas.drawLine(left, bottom, right, bottom, axisPaint)
 
-        val rawMinX = points.minOf { it.x }.toDouble()
-        val rawMaxX = points.maxOf { it.x }.toDouble()
+        val dataMinX = points.minOf { it.x }.toDouble()
+        val dataMaxX = points.maxOf { it.x }.toDouble()
+        val dataXSpan = (dataMaxX - dataMinX).takeIf { it > 0.0 } ?: 1.0
+        // Keep the first and last statistical boxes/nodes away from the plot clip edge.
+        val xPadding = dataXSpan * 0.055
+        val rawMinX = dataMinX - xPadding
+        val rawMaxX = dataMaxX + xPadding
         val rawMinY0 = points.minOf { p ->
             min(min(p.q1, p.lowerStd), min(p.sourceValue, p.outliers.minOrNull() ?: p.sourceValue))
         }
@@ -231,6 +239,22 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
 
         canvas.save()
         canvas.clipRect(left, top, right, bottom)
+
+        // 40%-transparent observation path. It connects timestamp-level totals and
+        // intentionally sits behind the statistical boxes so it remains secondary.
+        val trendPath = Path()
+        var trendStarted = false
+        visible.forEach { (index, x) ->
+            val y = sy(points[index].sourceValue)
+            if (!trendStarted) {
+                trendPath.moveTo(x, y)
+                trendStarted = true
+            } else {
+                trendPath.lineTo(x, y)
+            }
+        }
+        if (trendStarted) canvas.drawPath(trendPath, trendPaint)
+
         visible.forEach { (index, x) ->
             val p = points[index]
             val q1Y = sy(p.q1)
@@ -280,18 +304,27 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
             canvas.drawLine(x - halfBox, medianY, x + halfBox, medianY, medianPaint)
 
             // Tukey outliers for the cumulative timestamp-total distribution.
-            val outlierRadius = (halfBox * 0.62f).coerceIn(3f, 6f * resources.displayMetrics.density)
+            // Actual timestamp total = a compact blue rhombus. It is slightly wider than
+            // tall so the marker reads like a diamond/short rectangle rather than a dot.
+            val actualY = sy(p.sourceValue)
+            val actualHalfW = (halfBox * 0.52f).coerceIn(3.5f, 6.5f * resources.displayMetrics.density)
+            val actualHalfH = (actualHalfW * 0.58f).coerceAtLeast(2.4f)
+            val diamond = Path().apply {
+                moveTo(x - actualHalfW, actualY)
+                lineTo(x, actualY - actualHalfH)
+                lineTo(x + actualHalfW, actualY)
+                lineTo(x, actualY + actualHalfH)
+                close()
+            }
+            canvas.drawPath(diamond, actualPaint)
+            canvas.drawPath(diamond, actualOutlinePaint)
+
+            // Tiny red hollow circles denote Tukey outliers. Draw them after the blue
+            // observation so an observation that is itself an outlier remains visible.
+            val outlierRadius = (1.55f * resources.displayMetrics.density).coerceAtLeast(1.6f)
             p.outliers.forEach { outlier ->
                 canvas.drawCircle(x, sy(outlier), outlierRadius, outlierPaint)
             }
-
-            // The actual observation is the TOTAL of all numeric rows sharing this exact
-            // datetime. Blue is deliberately independent of red/green direction state.
-            val actualY = sy(p.sourceValue)
-            val actualHalfW = (halfBox * 0.42f).coerceIn(3f, 6f * resources.displayMetrics.density)
-            val actualHalfH = (actualHalfW * 0.72f).coerceAtLeast(2f)
-            canvas.drawRect(x - actualHalfW, actualY - actualHalfH, x + actualHalfW, actualY + actualHalfH, actualPaint)
-            canvas.drawRect(x - actualHalfW, actualY - actualHalfH, x + actualHalfW, actualY + actualHalfH, actualOutlinePaint)
 
             if (selectedIndex == index) {
                 val outlierTop = p.outliers.minOfOrNull { sy(it) } ?: actualY
@@ -364,7 +397,8 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
         label("⋯", "mean", textColorValue)
         label("│", "±1σ follows box", axisColorValue)
         label("○", "outlier", outlierColor)
-        label("■", "datetime total", actualColor)
+        label("◆", "datetime total", actualColor)
+        label("─", "observation path (40%)", withAlpha(actualColor, 102))
     }
 
     private fun drawSelectedDetail(canvas: Canvas, p: Statistics.CumulativeBoxPoint, left: Float, right: Float, bottom: Float) {
@@ -388,8 +422,12 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
         val bottom = max(top + 1f, height - 66f)
         if (touchX !in left..right || touchY !in top..bottom) return
 
-        val rawMinX = points.minOf { it.x }.toDouble()
-        val rawMaxX = points.maxOf { it.x }.toDouble()
+        val dataMinX = points.minOf { it.x }.toDouble()
+        val dataMaxX = points.maxOf { it.x }.toDouble()
+        val dataSpan = (dataMaxX - dataMinX).takeIf { it > 0.0 } ?: 1.0
+        val pad = dataSpan * 0.055
+        val rawMinX = dataMinX - pad
+        val rawMaxX = dataMaxX + pad
         val fullXSpan = (rawMaxX - rawMinX).takeIf { it != 0.0 } ?: 1.0
         val visibleXSpan = fullXSpan / zoomX
         val maxPanX = (1f - 1f / zoomX) / 2f
