@@ -1,0 +1,16 @@
+[
+  {
+    "date": "3/7/26 @ 14:05",
+    "price": "12.5",
+    "ticker": "FD",
+    "description": "Lunch",
+    "tags": "['non_cash', 'food']"
+  },
+  {
+    "date": "3/7/26",
+    "price": "+50",
+    "ticker": "BVG",
+    "description": "Example incoming value",
+    "tags": "['cashback']"
+  }
+]

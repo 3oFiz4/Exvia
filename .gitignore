@@ -1,0 +1,37 @@
+# Android / Gradle build outputs
+.gradle/
+build/
+**/build/
+
+# Local Android SDK path
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+
+# Signing keys — NEVER commit these
+*.jks
+*.keystore
+keystore.properties
+
+# APK / App Bundle outputs
+*.apk
+*.aab
+*.ap_
+
+# Native build outputs
+.externalNativeBuild/
+.cxx/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*~
