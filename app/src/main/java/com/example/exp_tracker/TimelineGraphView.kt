@@ -67,7 +67,7 @@ class TimelineGraphView(context: Context) : View(context) {
     })
 
     init {
-        textPaint.typeface = AppFonts.jetRoboto(context)
+        textPaint.typeface = AppFonts.jetBrains(context)
         isClickable = true
         isFocusable = true
     }

@@ -60,13 +60,38 @@ object Statistics {
         val totalExpenses: Double,
         val netCashFlow: Double,
         val savingsRate: Double?,
+        val expenseRatio: Double?,
+        val emergencyFundMonths: Double?,
+        val debtToIncomeRatio: Double?,
         val averageExpense: Double?,
+        val medianExpense: Double?,
+        val expenseStdv: Double?,
         val averageIncome: Double?,
+        val medianIncome: Double?,
+        val incomeStdv: Double?,
         val largestExpense: Double?,
         val largestIncome: Double?,
+        val expenseFrequencyPerDay: Double?,
+        val incomeStabilityScore: Double?,
+        val incomeGrowthRate: Double?,
+        val incomeDiversity: Int,
+        val largestIncomeSource: Pair<String, Double>?,
+        val recurringIncomeRatio: Double?,
+        val bonusIncomeRatio: Double?,
+        val averageTimeBetweenIncomeDays: Double?,
+        val expenseGrowthRate: Double?,
+        val expenseVolatility: Double?,
+        val recurringExpenseRatio: Double?,
+        val subscriptionBurden: Double?,
+        val cashBurnRate: Double?,
+        val cashReserveDays: Double?,
+        val averageDailyBalance: Double?,
+        val daysUntilCashRunsOut: Double?,
+        val noSpendDayRatio: Double?,
         val transactionCount: Int,
         val firstDate: String?,
         val lastDate: String?,
+        val periodDays: Int?,
         val categorySpending: List<Pair<String, Double>>,
     )
 
@@ -212,50 +237,149 @@ object Statistics {
 
     fun financeStats(data: TableData): FinanceStats? {
         val moneyKey = data.moneyKey ?: return null
-        var income = 0.0
-        var expense = 0.0
-        val incomes = mutableListOf<Double>()
-        val expenses = mutableListOf<Double>()
-        val category = linkedMapOf<String, Double>()
-        val dated = mutableListOf<Pair<Long, String>>()
+        data class Tx(val amount: Double, val income: Boolean, val epoch: Long?, val source: String, val text: String)
+        val txs = mutableListOf<Tx>()
+        val categorySpending = linkedMapOf<String, Double>()
+        val incomeSources = linkedMapOf<String, Double>()
 
-        for (row in data.rows) {
+        data.rows.forEach { row ->
             val raw = row.values[moneyKey]?.trim().orEmpty()
-            val number = parseNumber(raw) ?: continue
-            val isIncome = raw.startsWith("+")
-            if (isIncome) {
-                val amount = kotlin.math.abs(number)
-                income += amount
-                incomes += amount
-            } else {
-                val amount = kotlin.math.abs(number)
-                expense += amount
-                expenses += amount
-                val categoryKey = data.tickerKey?.let { row.values[it]?.trim() }.orEmpty().ifBlank { "Uncategorized" }
-                category[categoryKey] = (category[categoryKey] ?: 0.0) + amount
-            }
-            data.dateKey?.let { dateKey ->
-                val text = row.values[dateKey]?.trim().orEmpty()
-                parseDate(text)?.let { dated += it to text }
+            val parsed = parseNumber(raw) ?: return@forEach
+            val income = raw.startsWith("+")
+            val amount = kotlin.math.abs(parsed)
+            val epoch = data.dateKey?.let { parseDate(row.values[it].orEmpty()) }
+            val source = data.tickerKey?.let { row.values[it]?.trim() }.orEmpty().ifBlank { "Uncategorized" }
+            val allText = row.values.values.joinToString(" ").lowercase()
+            txs += Tx(amount, income, epoch, source, allText)
+            if (income) incomeSources[source] = (incomeSources[source] ?: 0.0) + amount
+            else categorySpending[source] = (categorySpending[source] ?: 0.0) + amount
+        }
+        if (txs.isEmpty()) return null
+
+        val incomes = txs.filter { it.income }
+        val expenses = txs.filterNot { it.income }
+        val incomeValues = incomes.map { it.amount }
+        val expenseValues = expenses.map { it.amount }
+        val totalIncome = incomeValues.sum()
+        val totalExpenses = expenseValues.sum()
+        val net = totalIncome - totalExpenses
+        val dated = txs.mapNotNull { tx -> tx.epoch?.let { it to tx } }.sortedBy { it.first }
+        val firstEpoch = dated.firstOrNull()?.first
+        val lastEpoch = dated.lastOrNull()?.first
+        val dayMs = 86_400_000.0
+        val periodDays = if (firstEpoch != null && lastEpoch != null) (((lastEpoch - firstEpoch) / dayMs).toInt() + 1).coerceAtLeast(1) else null
+        val avgDailyExpense = periodDays?.takeIf { it > 0 }?.let { totalExpenses / it }
+        val avgDailyIncome = periodDays?.takeIf { it > 0 }?.let { totalIncome / it }
+
+        fun mean(values: List<Double>) = values.takeIf { it.isNotEmpty() }?.average()
+        fun median(values: List<Double>) = quantile(values.sorted(), 0.5)
+        fun std(values: List<Double>): Double? {
+            if (values.isEmpty()) return null
+            val m = values.average()
+            return sqrt(values.sumOf { (it - m).pow(2) } / values.size)
+        }
+        fun growth(items: List<Tx>): Double? {
+            val d = items.filter { it.epoch != null }.sortedBy { it.epoch }
+            val first = d.firstOrNull()?.amount ?: return null
+            val last = d.lastOrNull()?.amount ?: return null
+            if (first == 0.0) return null
+            return (last - first) / kotlin.math.abs(first) * 100.0
+        }
+        fun ratioAmount(items: List<Tx>, predicate: (Tx) -> Boolean): Double? {
+            val total = items.sumOf { it.amount }
+            if (total <= 0.0) return null
+            return items.filter(predicate).sumOf { it.amount } / total * 100.0
+        }
+        val recurringWords = listOf("recurring", "subscription", "salary", "payroll", "rent", "mortgage", "utility", "monthly")
+        val bonusWords = listOf("bonus", "windfall", "gift", "reward")
+        val debtWords = listOf("debt", "loan", "credit", "mortgage")
+        val subscriptionWords = listOf("subscription", "subscribe", "netflix", "spotify", "membership")
+        fun containsAny(tx: Tx, words: List<String>) = words.any { it in tx.text }
+
+        val incomeMean = mean(incomeValues)
+        val incomeStd = std(incomeValues)
+        val stability = if (incomeMean != null && incomeMean > 0.0 && incomeStd != null) {
+            (100.0 / (1.0 + incomeStd / incomeMean)).coerceIn(0.0, 100.0)
+        } else null
+
+        val incomeDates = incomes.mapNotNull { it.epoch }.sorted()
+        val avgIncomeGap = if (incomeDates.size >= 2) incomeDates.zipWithNext().map { (a, b) -> (b - a) / dayMs }.average() else null
+
+        val debtPayments = expenses.filter { containsAny(it, debtWords) }.sumOf { it.amount }
+        val subscription = expenses.filter { containsAny(it, subscriptionWords) }.sumOf { it.amount }
+        val reserve = kotlin.math.max(net, 0.0)
+        val reserveDays = avgDailyExpense?.takeIf { it > 0.0 }?.let { reserve / it }
+        val emergencyMonths = reserveDays?.let { it / 30.4375 }
+        val burn = if (avgDailyExpense != null && avgDailyIncome != null) avgDailyExpense - avgDailyIncome else avgDailyExpense
+
+        // Reconstruct a zero-start daily closing balance from observed transactions.
+        val dailySigned = linkedMapOf<Long, Double>()
+        dated.forEach { (epoch, tx) ->
+            val day = epoch / 86_400_000L
+            dailySigned[day] = (dailySigned[day] ?: 0.0) + if (tx.income) tx.amount else -tx.amount
+        }
+        var balance = 0.0
+        val balances = mutableListOf<Double>()
+        if (dailySigned.isNotEmpty()) {
+            val firstDay = dailySigned.keys.minOrNull()!!
+            val lastDay = dailySigned.keys.maxOrNull()!!
+            for (day in firstDay..lastDay) {
+                balance += dailySigned[day] ?: 0.0
+                balances += balance
             }
         }
+        val noSpendRatio = if (periodDays != null && periodDays > 0 && dated.isNotEmpty()) {
+            val spendDays = expenses.mapNotNull { it.epoch }.map { it / 86_400_000L }.toSet().size
+            (periodDays - spendDays).coerceAtLeast(0).toDouble() / periodDays * 100.0
+        } else null
+        val daysUntilOut = if (balance > 0.0 && burn != null && burn > 0.0) balance / burn else null
+        val sortedDates = dated
+        val firstText = sortedDates.firstOrNull()?.second?.epoch?.let { epoch ->
+            data.dateKey?.let { key -> data.rows.firstOrNull { parseDate(it.values[key].orEmpty()) == epoch }?.values?.get(key) }
+        }
+        val lastText = sortedDates.lastOrNull()?.second?.epoch?.let { epoch ->
+            data.dateKey?.let { key -> data.rows.lastOrNull { parseDate(it.values[key].orEmpty()) == epoch }?.values?.get(key) }
+        }
 
-        val net = income - expense
-        val sortedDates = dated.sortedBy { it.first }
         return FinanceStats(
             moneyKey = moneyKey,
-            totalIncome = income,
-            totalExpenses = expense,
+            totalIncome = totalIncome,
+            totalExpenses = totalExpenses,
             netCashFlow = net,
-            savingsRate = if (income > 0.0) net / income * 100.0 else null,
-            averageExpense = expenses.takeIf { it.isNotEmpty() }?.average(),
-            averageIncome = incomes.takeIf { it.isNotEmpty() }?.average(),
-            largestExpense = expenses.maxOrNull(),
-            largestIncome = incomes.maxOrNull(),
-            transactionCount = incomes.size + expenses.size,
-            firstDate = sortedDates.firstOrNull()?.second,
-            lastDate = sortedDates.lastOrNull()?.second,
-            categorySpending = category.entries.sortedByDescending { it.value }.take(8).map { it.key to it.value },
+            savingsRate = if (totalIncome > 0.0) net / totalIncome * 100.0 else null,
+            expenseRatio = if (totalIncome > 0.0) totalExpenses / totalIncome * 100.0 else null,
+            emergencyFundMonths = emergencyMonths,
+            debtToIncomeRatio = if (totalIncome > 0.0) debtPayments / totalIncome * 100.0 else null,
+            averageExpense = mean(expenseValues),
+            medianExpense = median(expenseValues),
+            expenseStdv = std(expenseValues),
+            averageIncome = incomeMean,
+            medianIncome = median(incomeValues),
+            incomeStdv = incomeStd,
+            largestExpense = expenseValues.maxOrNull(),
+            largestIncome = incomeValues.maxOrNull(),
+            expenseFrequencyPerDay = periodDays?.takeIf { it > 0 }?.let { expenses.size.toDouble() / it },
+            incomeStabilityScore = stability,
+            incomeGrowthRate = growth(incomes),
+            incomeDiversity = incomeSources.size,
+            largestIncomeSource = incomeSources.maxByOrNull { it.value }?.let { it.key to it.value },
+            recurringIncomeRatio = ratioAmount(incomes) { containsAny(it, recurringWords) },
+            bonusIncomeRatio = ratioAmount(incomes) { containsAny(it, bonusWords) },
+            averageTimeBetweenIncomeDays = avgIncomeGap,
+            expenseGrowthRate = growth(expenses),
+            expenseVolatility = std(expenseValues),
+            recurringExpenseRatio = ratioAmount(expenses) { containsAny(it, recurringWords) },
+            subscriptionBurden = if (totalIncome > 0.0) subscription / totalIncome * 100.0 else null,
+            cashBurnRate = burn,
+            cashReserveDays = reserveDays,
+            averageDailyBalance = balances.takeIf { it.isNotEmpty() }?.average(),
+            daysUntilCashRunsOut = daysUntilOut,
+            noSpendDayRatio = noSpendRatio,
+            transactionCount = txs.size,
+            firstDate = firstText,
+            lastDate = lastText,
+            periodDays = periodDays,
+            categorySpending = categorySpending.entries.sortedByDescending { it.value }.take(10).map { it.key to it.value },
         )
     }
 

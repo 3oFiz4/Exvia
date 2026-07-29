@@ -127,6 +127,85 @@ class GitHubApi(
         request("DELETE", contentsUrl(file.path, includeRef = false), body.toString())
     }
 
+    /**
+     * Creates a private repository for the authenticated GitHub user, initializes the
+     * requested branch, then creates the configured JSON file with an empty array.
+     * The supplied username is verified against GET /user to avoid creating the repo
+     * under an unexpected account.
+     */
+    fun createAndInitializeRepository(
+        username: String,
+        repo: String,
+        branch: String,
+        folder: String,
+        defaultFile: String,
+    ) {
+        val login = JSONObject(request("GET", "https://api.github.com/user")).optString("login")
+        require(login.equals(username.trim(), ignoreCase = true)) {
+            "PAT belongs to '$login', not '${username.trim()}'."
+        }
+        val repoName = repo.trim()
+        require(repoName.isNotBlank()) { "Repository name is required." }
+        val desiredBranch = branch.trim().ifBlank { "main" }
+        val created = JSONObject(request(
+            "POST",
+            "https://api.github.com/user/repos",
+            JSONObject().apply {
+                put("name", repoName)
+                put("private", true)
+                put("auto_init", true)
+                put("description", "Expense data for exp_tracker")
+            }.toString(),
+        ))
+        val defaultBranch = created.optString("default_branch").ifBlank { "main" }
+
+        if (!desiredBranch.equals(defaultBranch, ignoreCase = false)) {
+            var sha: String? = null
+            var lastError: Exception? = null
+            for (attempt in 0 until 6) {
+                try {
+                    val ref = JSONObject(request(
+                        "GET",
+                        "https://api.github.com/repos/${encodeSegment(login)}/${encodeSegment(repoName)}/git/ref/heads/${encodeSegment(defaultBranch)}",
+                    ))
+                    sha = ref.getJSONObject("object").getString("sha")
+                    break
+                } catch (e: Exception) {
+                    lastError = e
+                    if (attempt < 5) Thread.sleep(450L * (attempt + 1))
+                }
+            }
+            val baseSha = sha ?: throw (lastError ?: IllegalStateException("Could not initialize default branch."))
+            request(
+                "POST",
+                "https://api.github.com/repos/${encodeSegment(login)}/${encodeSegment(repoName)}/git/refs",
+                JSONObject().apply {
+                    put("ref", "refs/heads/$desiredBranch")
+                    put("sha", baseSha)
+                }.toString(),
+            )
+            request(
+                "PATCH",
+                "https://api.github.com/repos/${encodeSegment(login)}/${encodeSegment(repoName)}",
+                JSONObject().apply { put("default_branch", desiredBranch) }.toString(),
+            )
+        }
+
+        var fileName = defaultFile.trim().ifBlank { "expenses.json" }
+        if (!fileName.endsWith(".json", ignoreCase = true)) fileName += ".json"
+        val path = listOf(folder.trim().trim('/'), fileName).filter { it.isNotBlank() }.joinToString("/")
+        val body = JSONObject().apply {
+            put("message", "Initialize exp_tracker data")
+            put("content", Base64.encodeToString("[]\n".toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
+            put("branch", desiredBranch)
+        }
+        request(
+            "PUT",
+            "https://api.github.com/repos/${encodeSegment(login)}/${encodeSegment(repoName)}/contents/${encodePath(path)}",
+            body.toString(),
+        )
+    }
+
     private fun parseTable(text: String): TableData {
         val document = parseEditableDocument(text)
         val keys = collectKeys(document.items)
@@ -345,7 +424,7 @@ class GitHubApi(
             readTimeout = 20_000
             setRequestProperty("Accept", "application/vnd.github+json")
             setRequestProperty("Authorization", "Bearer $token")
-            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+            setRequestProperty("X-GitHub-Api-Version", "2026-03-10")
             setRequestProperty("User-Agent", "exp_tracker-android")
             if (body != null) {
                 doOutput = true

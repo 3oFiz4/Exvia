@@ -1,6 +1,9 @@
 package com.example.exp_tracker
 
 import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.UUID
 
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -30,6 +33,9 @@ class SettingsStore(context: Context) {
             tickerColors = parseTickerColors(
                 prefs.getString(KEY_TICKER_COLORS, null) ?: colorsToText(RepoConfig.TICKER_COLORS),
             ),
+            plotColumns = parseColumnList(prefs.getString(KEY_PLOT_COLUMNS, "price") ?: "price"),
+            financeColumns = parseColumnList(prefs.getString(KEY_FINANCE_COLUMNS, "price") ?: "price"),
+            customMetrics = parseCustomMetrics(prefs.getString(KEY_CUSTOM_METRICS, "[]") ?: "[]"),
             themePreset = preset,
             palette = palette,
         )
@@ -48,6 +54,9 @@ class SettingsStore(context: Context) {
             .putString(KEY_TICKER_KEY, settings.tickerKeyOverride.trim())
             .putString(KEY_TAGS_KEY, settings.tagsKeyOverride.trim())
             .putString(KEY_TICKER_COLORS, colorsToText(settings.tickerColors))
+            .putString(KEY_PLOT_COLUMNS, settings.plotColumns.joinToString(", "))
+            .putString(KEY_FINANCE_COLUMNS, settings.financeColumns.joinToString(", "))
+            .putString(KEY_CUSTOM_METRICS, customMetricsToJson(settings.customMetrics))
             .putString(KEY_THEME_PRESET, settings.themePreset.id)
             .putString(KEY_PRIMARY, settings.palette.primary)
             .putString(KEY_SECONDARY, settings.palette.secondary)
@@ -57,6 +66,12 @@ class SettingsStore(context: Context) {
             .putString(KEY_SENARY, settings.palette.senary)
             .apply()
     }
+
+    fun repoInitializationAsked(): Boolean = prefs.getBoolean(KEY_REPO_INIT_ASKED, false)
+    fun setRepoInitializationAsked(value: Boolean) { prefs.edit().putBoolean(KEY_REPO_INIT_ASKED, value).apply() }
+
+    fun loadFilterSnippets(): List<FilterSnippet> = parseFilterSnippets(prefs.getString(KEY_FILTER_SNIPPETS, "[]") ?: "[]")
+    fun saveFilterSnippets(items: List<FilterSnippet>) { prefs.edit().putString(KEY_FILTER_SNIPPETS, filterSnippetsToJson(items)).apply() }
 
     companion object {
         private const val PREFS = "exp_tracker_settings"
@@ -71,6 +86,11 @@ class SettingsStore(context: Context) {
         private const val KEY_TICKER_KEY = "ticker_key"
         private const val KEY_TAGS_KEY = "tags_key"
         private const val KEY_TICKER_COLORS = "ticker_colors"
+        private const val KEY_PLOT_COLUMNS = "plot_columns"
+        private const val KEY_FINANCE_COLUMNS = "finance_columns"
+        private const val KEY_CUSTOM_METRICS = "custom_metrics"
+        private const val KEY_FILTER_SNIPPETS = "filter_snippets"
+        private const val KEY_REPO_INIT_ASKED = "repo_initialization_asked"
         private const val KEY_THEME_PRESET = "theme_preset"
         private const val KEY_PRIMARY = "theme_primary"
         private const val KEY_SECONDARY = "theme_secondary"
@@ -93,7 +113,46 @@ class SettingsStore(context: Context) {
             return result
         }
 
-        fun colorsToText(colors: Map<String, String>): String = colors.entries
-            .joinToString("\n") { "${it.key}=${it.value}" }
+        fun colorsToText(colors: Map<String, String>): String = colors.entries.joinToString("\n") { "${it.key}=${it.value}" }
+
+        fun parseColumnList(text: String): List<String> = text.split(',', '\n')
+            .map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+
+        private fun parseCustomMetrics(text: String): List<CustomMetricDefinition> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim()
+                val script = obj.optString("script")
+                if (name.isBlank() || script.isBlank()) return@mapNotNull null
+                CustomMetricDefinition(
+                    id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                    name = name,
+                    script = script,
+                    enabled = obj.optBoolean("enabled", true),
+                )
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun customMetricsToJson(items: List<CustomMetricDefinition>): String = JSONArray().apply {
+            items.forEach { item -> put(JSONObject().apply {
+                put("id", item.id); put("name", item.name); put("script", item.script); put("enabled", item.enabled)
+            }) }
+        }.toString()
+
+        private fun parseFilterSnippets(text: String): List<FilterSnippet> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim()
+                val query = obj.optString("query").trim()
+                if (name.isBlank() || query.isBlank()) return@mapNotNull null
+                FilterSnippet(obj.optString("id").ifBlank { UUID.randomUUID().toString() }, name, query)
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun filterSnippetsToJson(items: List<FilterSnippet>): String = JSONArray().apply {
+            items.forEach { item -> put(JSONObject().apply { put("id", item.id); put("name", item.name); put("query", item.query) }) }
+        }.toString()
     }
 }

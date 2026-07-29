@@ -27,6 +27,19 @@ data class RepoFile(
     val sha: String,
 )
 
+data class CustomMetricDefinition(
+    val id: String,
+    val name: String,
+    val script: String,
+    val enabled: Boolean = true,
+)
+
+data class FilterSnippet(
+    val id: String,
+    val name: String,
+    val query: String,
+)
+
 data class RepoSettings(
     val owner: String,
     val repo: String,
@@ -39,6 +52,9 @@ data class RepoSettings(
     val tickerKeyOverride: String,
     val tagsKeyOverride: String,
     val tickerColors: Map<String, String>,
+    val plotColumns: List<String>,
+    val financeColumns: List<String>,
+    val customMetrics: List<CustomMetricDefinition>,
     val themePreset: ThemePreset,
     val palette: ThemePalette,
 ) {
@@ -73,6 +89,13 @@ data class RepoSettings(
         tagsKeyOverride,
         listOf("tags", "tag", "labels", "label"),
     )
+
+    fun resolvedPlotColumns(keys: List<String>): List<String> = resolveConfiguredColumns(plotColumns, keys)
+    fun resolvedFinanceColumns(keys: List<String>): List<String> = resolveConfiguredColumns(financeColumns, keys)
+
+    private fun resolveConfiguredColumns(configured: List<String>, keys: List<String>): List<String> = configured
+        .mapNotNull { wanted -> keys.firstOrNull { it.equals(wanted, ignoreCase = true) } }
+        .distinct()
 
     private fun detectKey(keys: List<String>, override: String, aliases: List<String>): String? {
         if (override.isNotBlank()) {
