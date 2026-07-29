@@ -16,6 +16,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.Button
@@ -267,6 +268,7 @@ class MainActivity : Activity() {
             maxHeight = dp(30)
             setPadding(dp(8), dp(2), dp(8), dp(2))
             textSize = 12f
+            setOnLongClickListener { true }
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -479,8 +481,8 @@ class MainActivity : Activity() {
 
         customMetricList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
         renderCustomMetricSettings()
-        body.addView(accordion("Custom metric", tooltip = "Create JavaScript metrics evaluated locally against the current filtered JSON rows. Scripts run without a Java bridge, file access, or network loading.") { container ->
-            container.addView(infoText("Script body receives rows, keys, dateKey, moneyKey, tickerKey, tagsKey, and num(value). Use return to produce the displayed result.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+        body.addView(accordion("Custom metric", tooltip = "Create JavaScript metrics evaluated locally against the current filtered JSON. Scripts run without a Java bridge, file access, or network loading.") { container ->
+            container.addView(infoText("The only injected host object is jsonFile. Use jsonFile.name for the selected filename and JSON.parse(jsonFile.content) to parse the current visible/filtered JSON rows yourself.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
             container.addView(customMetricList, matchWidth())
             container.addView(styledButton("+ Add custom metric").apply { setOnClickListener { editCustomMetric(null) } }, spacedMatchWidth(4))
         }, spacedMatchWidth(12))
@@ -592,6 +594,35 @@ class MainActivity : Activity() {
     private fun renderCustomMetricSettings() {
         if (!::customMetricList.isInitialized) return
         customMetricList.removeAllViews()
+
+        customMetricList.addView(infoText("Built-in examples").apply {
+            setTextColor(PRIMARY)
+            AppFonts.apply(this, bold = true)
+        }, spacedMatchWidth(3))
+        customMetricList.addView(infoText("These templates are not enabled automatically. Tap Use to open an editable copy. Each script receives only jsonFile { name, content }.").apply {
+            setTextColor(MUTED)
+        }, spacedMatchWidth(5))
+        BuiltinExamples.customMetrics.forEach { example ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(1), 0, dp(1))
+            }
+            row.addView(infoText(example.name).apply { setTextColor(WHITE) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = "Use"
+                gravity = Gravity.CENTER
+                setTextColor(PRIMARY)
+                AppFonts.apply(this)
+                setOnClickListener { editCustomMetric(null, example) }
+            }, LinearLayout.LayoutParams(dp(52), dp(30)))
+            customMetricList.addView(row, matchWidth())
+        }
+
+        customMetricList.addView(infoText("Your custom metrics").apply {
+            setTextColor(PRIMARY)
+            AppFonts.apply(this, bold = true)
+        }, spacedMatchWidth(3))
         if (customMetricsDraft.isEmpty()) customMetricList.addView(infoText("No custom metrics configured.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
         customMetricsDraft.forEach { metric ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(2), 0, dp(2)) }
@@ -602,13 +633,30 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun editCustomMetric(existing: CustomMetricDefinition?) {
-        val name = styledInput("custom_metric.name").apply { setText(existing?.name.orEmpty()) }
-        val script = styledInput("custom_metric.javascript").apply {
-            isSingleLine = false; minLines = 8; gravity = Gravity.TOP; setText(existing?.script ?: "return rows.length;")
+    private fun editCustomMetric(existing: CustomMetricDefinition?, template: CustomMetricDefinition? = null) {
+        val source = existing ?: template
+        val name = styledInput("custom_metric.name").apply {
+            setText(source?.name?.removePrefix("Example · ").orEmpty())
         }
-        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0); addView(name, spacedMatchWidth(6)); addView(script, matchWidth()) }
-        val dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New custom metric" else "Edit custom metric")
+        val script = styledInput("custom_metric.javascript").apply {
+            isSingleLine = false
+            minLines = 8
+            gravity = Gravity.TOP
+            setText(source?.script ?: "const rows = JSON.parse(jsonFile.content);\nreturn rows.length;")
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+            addView(infoText("Available host value: jsonFile.name and jsonFile.content. Parse the JSON yourself with JSON.parse(jsonFile.content).").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+            addView(name, spacedMatchWidth(6))
+            addView(script, matchWidth())
+        }
+        val title = when {
+            existing != null -> "Edit custom metric"
+            template != null -> "Use example metric"
+            else -> "New custom metric"
+        }
+        val dialog = AlertDialog.Builder(this).setTitle(title)
             .setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -891,6 +939,24 @@ class MainActivity : Activity() {
     private fun showFilterSnippetManager() {
         var managerDialog: AlertDialog? = null
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(4), dp(12), dp(4)); setBackgroundColor(BLACK) }
+        list.addView(infoText("Examples").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(3))
+        BuiltinExamples.filterSnippets.forEach { snippet ->
+            val choose = TextView(this).apply {
+                text = "${snippet.name}\n${snippet.query}"
+                maxLines = 3
+                textSize = 11.5f
+                setTextColor(WHITE)
+                setPadding(dp(5), dp(4), dp(5), dp(4))
+                AppFonts.apply(this)
+                setOnClickListener {
+                    filterInput.setText(snippet.query)
+                    filterQuery = snippet.query
+                    managerDialog?.dismiss()
+                }
+            }
+            list.addView(choose, spacedMatchWidth(3))
+        }
+        list.addView(infoText("Saved snippets").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(3))
         if (filterSnippets.isEmpty()) list.addView(infoText("No saved filtering snippets.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
         filterSnippets.forEach { snippet ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(2), 0, dp(2)) }
@@ -1179,15 +1245,15 @@ class MainActivity : Activity() {
 
         val enabledCustom = customMetricsDraft.filter { it.enabled }
         if (enabledCustom.isNotEmpty()) {
-            statContent.addView(accordion("Custom", tooltip = "User-defined JavaScript metrics evaluated locally against the currently visible/filtered JSON rows.") { container ->
+            statContent.addView(accordion("Custom", tooltip = "User-defined JavaScript metrics evaluated locally against the currently visible/filtered JSON rows through jsonFile.content.") { container ->
                 enabledCustom.forEach { metric ->
                     val result = TextView(this).apply { text = "Evaluating…"; setTextColor(MUTED); gravity = Gravity.END; AppFonts.apply(this) }
                     val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(3), 0, dp(3)) }
-                    val name = infoText(metric.name).apply { setTextColor(STAT_SHAPE); tooltipController.attachHold(this, { "Custom JavaScript metric. Hold the metric name in Settings or edit it under Custom metric to inspect the script." }) }
+                    val name = infoText(metric.name).apply { setTextColor(STAT_SHAPE); tooltipController.attachHold(this, { "Custom JavaScript metric evaluated from jsonFile.content. Edit it under Settings → Custom metric to inspect the script." }) }
                     row.addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                     row.addView(result, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                     container.addView(row, matchWidth())
-                    customMetricEngine.evaluate(metric, data) { evaluated ->
+                    customMetricEngine.evaluate(metric, data, selectedPath?.substringAfterLast('/') ?: "current.json") { evaluated ->
                         runOnUiThread {
                             evaluated.fold(
                                 onSuccess = { result.text = it; result.setTextColor(WHITE) },
@@ -1732,14 +1798,43 @@ class MainActivity : Activity() {
     }
 
     private fun attachTimedHold(view: View, delayMs: Long, action: () -> Unit) {
+        val touchSlop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
+        var active = false
         var fired = false
-        val runnable = Runnable { fired = true; action() }
+        var downX = 0f
+        var downY = 0f
+        val runnable = Runnable {
+            if (!active) return@Runnable
+            fired = true
+            action()
+        }
         view.setOnTouchListener { _, event ->
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { fired = false; uiHandler.postDelayed(runnable, delayMs) }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> uiHandler.removeCallbacks(runnable)
+                MotionEvent.ACTION_DOWN -> {
+                    uiHandler.removeCallbacks(runnable)
+                    active = true
+                    fired = false
+                    downX = event.x
+                    downY = event.y
+                    uiHandler.postDelayed(runnable, delayMs)
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (active && (kotlin.math.abs(event.x - downX) > touchSlop || kotlin.math.abs(event.y - downY) > touchSlop)) {
+                        active = false
+                        uiHandler.removeCallbacks(runnable)
+                    }
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    active = false
+                    uiHandler.removeCallbacks(runnable)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    active = false
+                    uiHandler.removeCallbacks(runnable)
+                    if (fired) return@setOnTouchListener true
+                }
             }
-            fired
+            false
         }
     }
 

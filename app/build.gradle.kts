@@ -10,8 +10,8 @@ android {
         applicationId = "com.example.exp_tracker"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.9"
+        versionCode = 10
+        versionName = "1.9.1"
     }
 
     compileOptions {

@@ -7,8 +7,11 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import android.widget.EditText
 import android.widget.PopupWindow
 import android.widget.TextView
+import kotlin.math.abs
 
 class TooltipController(
     private val context: Context,
@@ -18,26 +21,68 @@ class TooltipController(
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private var popup: PopupWindow? = null
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
 
+    /**
+     * Shows a tooltip only after a genuine stationary hold.
+     *
+     * A normal tap must never schedule a tooltip that survives ACTION_UP. The
+     * delayed callback therefore verifies the local active-press flag before
+     * displaying anything. Moving beyond touch slop,
+     * adding another pointer, releasing, or cancellation invalidates the hold.
+     */
     fun attachHold(view: View, textProvider: () -> String, holdMs: Long = 2_000L) {
+        var active = false
         var fired = false
+        var downX = 0f
+        var downY = 0f
+        // Non-input TextViews do not necessarily keep receiving touch events when
+        // their listener returns false. Consume those gestures ourselves and replay
+        // a short tap with performClick(); EditText keeps its native touch handling.
+        val consumeGesture = view !is EditText
+
         val runnable = Runnable {
+            if (!active) return@Runnable
             fired = true
             show(view, textProvider())
         }
+
         view.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    fired = false
-                    handler.postDelayed(runnable, holdMs)
-                }
-                MotionEvent.ACTION_MOVE -> Unit
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     handler.removeCallbacks(runnable)
-                    if (fired) true else false
+                    active = true
+                    fired = false
+                    downX = event.x
+                    downY = event.y
+                    handler.postDelayed(runnable, holdMs)
+                    return@setOnTouchListener consumeGesture
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (active && (abs(event.x - downX) > touchSlop || abs(event.y - downY) > touchSlop)) {
+                        active = false
+                        handler.removeCallbacks(runnable)
+                    }
+                    return@setOnTouchListener consumeGesture
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    active = false
+                    handler.removeCallbacks(runnable)
+                    return@setOnTouchListener consumeGesture
+                }
+                MotionEvent.ACTION_UP -> {
+                    active = false
+                    handler.removeCallbacks(runnable)
+                    if (consumeGesture && !fired) view.performClick()
+                    return@setOnTouchListener consumeGesture
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    active = false
+                    handler.removeCallbacks(runnable)
+                    return@setOnTouchListener consumeGesture
                 }
             }
-            false
+            consumeGesture
         }
     }
 

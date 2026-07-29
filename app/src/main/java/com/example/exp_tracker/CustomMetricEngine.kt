@@ -13,13 +13,22 @@ import org.json.JSONObject
  * WebView JavaScript runtime. No JavaScript bridge, file/content access,
  * DOM storage, or network loading is enabled.
  *
- * A script is treated as a JavaScript function body. It receives:
- *   rows, keys, dateKey, moneyKey, tickerKey, tagsKey, num(value)
- * and should use `return` to produce a displayed result.
+ * v1.9.1 deliberately injects only one host value:
+ *
+ *   jsonFile.name     selected JSON filename
+ *   jsonFile.content  current effective JSON row array as text
+ *
+ * "Effective" means the same filtered subset currently visible in Table/Stat.
+ * Scripts parse the JSON themselves with JSON.parse(jsonFile.content).
  */
 class CustomMetricEngine(private val context: Context) {
     @SuppressLint("SetJavaScriptEnabled")
-    fun evaluate(definition: CustomMetricDefinition, data: TableData, callback: (Result<String>) -> Unit) {
+    fun evaluate(
+        definition: CustomMetricDefinition,
+        data: TableData,
+        fileName: String,
+        callback: (Result<String>) -> Unit,
+    ) {
         val webView = WebView(context)
         webView.settings.javaScriptEnabled = true
         webView.settings.allowFileAccess = false
@@ -28,29 +37,28 @@ class CustomMetricEngine(private val context: Context) {
         webView.settings.cacheMode = WebSettings.LOAD_NO_CACHE
         try { webView.settings.blockNetworkLoads = true } catch (_: Exception) { }
 
-        val rows = JSONArray().apply {
+        val effectiveRows = JSONArray().apply {
             data.rows.forEach { row ->
-                put(JSONObject().apply { row.values.forEach { (k, v) -> put(k, v) } })
+                val rawObject = try {
+                    JSONObject(row.originalJson)
+                } catch (_: Exception) {
+                    JSONObject().apply { row.values.forEach { (key, value) -> put(key, value) } }
+                }
+                put(rawObject)
             }
         }
-        val keys = JSONArray(data.keys)
+        val jsonFile = JSONObject().apply {
+            put("name", fileName)
+            put("content", effectiveRows.toString())
+        }
+
         val script = """
             (() => {
-              const rows = $rows;
-              const keys = $keys;
-              const dateKey = ${JSONObject.quote(data.dateKey ?: "")};
-              const moneyKey = ${JSONObject.quote(data.moneyKey ?: "")};
-              const tickerKey = ${JSONObject.quote(data.tickerKey ?: "")};
-              const tagsKey = ${JSONObject.quote(data.tagsKey ?: "")};
-              const num = (value) => {
-                if (value === null || value === undefined) return null;
-                const n = Number(String(value).replace(/,/g, ''));
-                return Number.isFinite(n) ? n : null;
-              };
+              const jsonFile = Object.freeze($jsonFile);
               try {
-                const value = (function(rows, keys, dateKey, moneyKey, tickerKey, tagsKey, num) {
+                const value = (function(jsonFile) {
                   ${definition.script}
-                })(rows, keys, dateKey, moneyKey, tickerKey, tagsKey, num);
+                })(jsonFile);
                 return JSON.stringify({ok:true, value:value});
               } catch (e) {
                 return JSON.stringify({ok:false, error:String(e && e.message ? e.message : e)});
