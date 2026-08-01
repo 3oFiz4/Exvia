@@ -71,6 +71,8 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
 
     private var points: List<Statistics.CumulativeBoxPoint> = emptyList()
     private var selectedIndex: Int? = null
+    private var timeAxis = true
+    private var customXLabels: Map<Long, String> = emptyMap()
 
     private var zoomX = 1f
     private var zoomY = 1f
@@ -130,6 +132,12 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
         this.points = points.sortedBy { it.x }
         selectedIndex = this.points.lastIndex.takeIf { it >= 0 }
         resetViewport()
+    }
+
+    fun setXAxis(timeAxis: Boolean, labels: Map<Long, String> = emptyMap()) {
+        this.timeAxis = timeAxis
+        this.customXLabels = labels
+        invalidate()
     }
 
     fun resetViewport() {
@@ -336,7 +344,7 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
         }
         canvas.restore()
 
-        drawWrappedTimeLabels(canvas, visible, left, right, bottom)
+        if (timeAxis) drawWrappedTimeLabels(canvas, visible, left, right, bottom) else drawCustomXLabels(canvas, visible, left, right, bottom)
         canvas.drawText(compact(maxY), 4f, top + textPaint.textSize, textPaint)
         canvas.drawText(compact(minY), 4f, bottom, textPaint)
 
@@ -371,6 +379,28 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
         }
     }
 
+
+    private fun drawCustomXLabels(
+        canvas: Canvas,
+        visible: List<Pair<Int, Float>>,
+        left: Float,
+        right: Float,
+        bottom: Float,
+    ) {
+        if (visible.isEmpty()) return
+        val minimumLabelWidth = 64f * resources.displayMetrics.density
+        val maxLabels = max(2, ((right - left) / minimumLabelWidth).toInt())
+        val step = max(1, kotlin.math.ceil(visible.size.toDouble() / maxLabels).toInt())
+        val chosen = visible.filterIndexed { i, _ -> i % step == 0 }.toMutableList()
+        if (chosen.lastOrNull()?.first != visible.last().first) chosen += visible.last()
+        chosen.distinctBy { it.first }.forEach { (index, x) ->
+            val raw = customXLabels[points[index].x] ?: points[index].x.toString()
+            val label = ellipsize(raw, minimumLabelWidth * 1.4f, textPaint)
+            val labelX = (x - textPaint.measureText(label) / 2f).coerceIn(left, right - textPaint.measureText(label))
+            canvas.drawText(label, labelX, bottom + textPaint.textSize + 7f, textPaint)
+        }
+    }
+
     private fun drawLegend(canvas: Canvas, left: Float, right: Float, top: Float) {
         var x = left
         var y = top - detailPaint.textSize - 7f
@@ -402,9 +432,11 @@ class CumulativeBoxPlotView(context: Context) : View(context) {
     }
 
     private fun drawSelectedDetail(canvas: Canvas, p: Statistics.CumulativeBoxPoint, left: Float, right: Float, bottom: Float) {
-        val formatter = SimpleDateFormat("d/M/yy @ HH:mm", Locale.getDefault())
+        val xLabel = if (timeAxis) {
+            SimpleDateFormat("d/M/yy @ HH:mm", Locale.getDefault()).format(Date(p.x))
+        } else customXLabels[p.x] ?: p.x.toString()
         val outlierStatus = if (p.sourceIsOutlier) "  total=OUTLIER" else ""
-        val line = "${formatter.format(Date(p.x))}  total=${compact(p.sourceValue)}  rows=${p.sourceCount}  timestamp n=${p.n}  Q1=${compact(p.q1)}  med=${compact(p.median)}  mean=${compact(p.mean)}  Q3=${compact(p.q3)}  σ=${compact(p.stdv)}  outliers=${p.outliers.size}$outlierStatus"
+        val line = "$xLabel  total=${compact(p.sourceValue)}  rows=${p.sourceCount}  timestamp n=${p.n}  Q1=${compact(p.q1)}  med=${compact(p.median)}  mean=${compact(p.mean)}  Q3=${compact(p.q3)}  σ=${compact(p.stdv)}  outliers=${p.outliers.size}$outlierStatus"
         val maxWidth = right - left
         val clipped = ellipsize(line, maxWidth, detailPaint)
         val textWidth = detailPaint.measureText(clipped)

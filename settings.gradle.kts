@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "exp_tracker"
+rootProject.name = "Exvia"
 include(":app")

@@ -40,6 +40,13 @@ class GitHubApi(
 
     fun fetchTable(path: String): TableData = parseTable(getFile(path).text)
 
+    fun fetchTableFile(path: String): Pair<GitHubFile, TableData> {
+        val file = getFile(path)
+        return file to parseTable(file.text)
+    }
+
+    fun parseCachedTable(text: String): TableData = parseTable(text)
+
     fun appendRow(path: String, inputValues: Map<String, String>): String {
         val existing = getFile(path)
         val document = parseEditableDocument(existing.text)
@@ -154,7 +161,7 @@ class GitHubApi(
                 put("name", repoName)
                 put("private", true)
                 put("auto_init", true)
-                put("description", "Expense data for exp_tracker")
+                put("description", "Expense data for Exvia")
             }.toString(),
         ))
         val defaultBranch = created.optString("default_branch").ifBlank { "main" }
@@ -195,7 +202,7 @@ class GitHubApi(
         if (!fileName.endsWith(".json", ignoreCase = true)) fileName += ".json"
         val path = listOf(folder.trim().trim('/'), fileName).filter { it.isNotBlank() }.joinToString("/")
         val body = JSONObject().apply {
-            put("message", "Initialize exp_tracker data")
+            put("message", "Initialize Exvia data")
             put("content", Base64.encodeToString("[]\n".toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
             put("branch", desiredBranch)
         }
@@ -425,7 +432,7 @@ class GitHubApi(
             setRequestProperty("Accept", "application/vnd.github+json")
             setRequestProperty("Authorization", "Bearer $token")
             setRequestProperty("X-GitHub-Api-Version", "2026-03-10")
-            setRequestProperty("User-Agent", "exp_tracker-android")
+            setRequestProperty("User-Agent", "Exvia-Android")
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")

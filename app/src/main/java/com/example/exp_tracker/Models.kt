@@ -40,6 +40,14 @@ data class FilterSnippet(
     val query: String,
 )
 
+data class CustomPlotDefinition(
+    val id: String,
+    val name: String,
+    val xSource: String,
+    val ySource: String,
+    val enabled: Boolean = true,
+)
+
 data class RepoSettings(
     val owner: String,
     val repo: String,
@@ -55,6 +63,7 @@ data class RepoSettings(
     val plotColumns: List<String>,
     val financeColumns: List<String>,
     val customMetrics: List<CustomMetricDefinition>,
+    val customPlots: List<CustomPlotDefinition>,
     val themePreset: ThemePreset,
     val palette: ThemePalette,
 ) {

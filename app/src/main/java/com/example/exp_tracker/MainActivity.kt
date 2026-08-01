@@ -3,6 +3,7 @@ package com.example.exp_tracker
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.res.ColorStateList
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
@@ -23,6 +24,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.MultiAutoCompleteTextView
 import android.widget.ScrollView
@@ -40,7 +42,8 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
     companion object {
-        private const val PREFS = "exp_tracker_ui"
+        private const val PREFS = "exvia_ui"
+        private const val LEGACY_PREFS = "exp_tracker_ui"
         private const val PREF_SELECTED_PATH = "selected_path"
         private val GREEN = Color.rgb(52, 199, 89)
     }
@@ -53,6 +56,7 @@ class MainActivity : Activity() {
     private lateinit var settings: RepoSettings
     private lateinit var tooltipController: TooltipController
     private lateinit var customMetricEngine: CustomMetricEngine
+    private lateinit var fileCache: ExviaFileCache
     private val uiHandler = Handler(Looper.getMainLooper())
 
     private val palette get() = settings.palette
@@ -89,6 +93,7 @@ class MainActivity : Activity() {
     private lateinit var tableTabButton: Button
     private lateinit var statTabButton: Button
     private lateinit var filesTabButton: Button
+    private lateinit var resyncButton: TextView
 
     private lateinit var ownerSetting: EditText
     private lateinit var repoSetting: EditText
@@ -112,7 +117,9 @@ class MainActivity : Activity() {
     private lateinit var plotColumnsSetting: EditText
     private lateinit var financeColumnsSetting: EditText
     private lateinit var customMetricList: LinearLayout
+    private lateinit var customPlotList: LinearLayout
     private var customMetricsDraft = mutableListOf<CustomMetricDefinition>()
+    private var customPlotsDraft = mutableListOf<CustomPlotDefinition>()
     private var filterSnippets = mutableListOf<FilterSnippet>()
 
     private val formInputs = linkedMapOf<String, EditText>()
@@ -130,9 +137,12 @@ class MainActivity : Activity() {
         settingsStore = SettingsStore(this)
         settings = settingsStore.load()
         customMetricsDraft = settings.customMetrics.toMutableList()
+        customPlotsDraft = settings.customPlots.toMutableList()
         filterSnippets = settingsStore.loadFilterSnippets().toMutableList()
         tooltipController = TooltipController(this, { PRIMARY }, { BLACK }, { WHITE })
         customMetricEngine = CustomMetricEngine(this)
+        fileCache = ExviaFileCache(this)
+        migrateUiPreferences()
         val lightPalette = isLightPalette(settings.palette)
         setTheme(if (lightPalette) R.style.AppTheme_Light else R.style.AppTheme_Dark)
         window.statusBarColor = BLACK
@@ -153,13 +163,23 @@ class MainActivity : Activity() {
                 statusText.text = "Configure GitHub in Settings. Swipe right from the left edge."
                 drawerRoot.openDrawer()
             }
-            else -> refreshFilesAndTable()
+            else -> loadCachedOrRefresh()
         }
     }
 
     override fun onDestroy() {
         executor.shutdownNow()
         super.onDestroy()
+    }
+
+    private fun migrateUiPreferences() {
+        val current = getSharedPreferences(PREFS, MODE_PRIVATE)
+        if (!current.contains(PREF_SELECTED_PATH)) {
+            val legacy = getSharedPreferences(LEGACY_PREFS, MODE_PRIVATE)
+            legacy.getString(PREF_SELECTED_PATH, null)?.let {
+                current.edit().putString(PREF_SELECTED_PATH, it).apply()
+            }
+        }
     }
 
     private fun buildUi(): SwipeSettingsLayout {
@@ -174,17 +194,37 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        val logoBitmap = runCatching {
+            assets.open("logo.png").use { BitmapFactory.decodeStream(it) }
+        }.getOrNull()
+        if (logoBitmap != null) {
+            titleRow.addView(ImageView(this).apply {
+                setImageBitmap(logoBitmap)
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                contentDescription = "Exvia logo"
+            }, LinearLayout.LayoutParams(dp(30), dp(30)).apply { marginEnd = dp(9) })
+        }
         titleRow.addView(TextView(this).apply {
-            text = "exp_tracker"
+            text = "Exvia"
             textSize = 22f
             setTextColor(WHITE)
             setPadding(0, dp(2), 0, dp(4))
             AppFonts.apply(this, bold = true)
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        titleRow.addView(TextView(this).apply {
-            text = "Settings ›"
+        resyncButton = TextView(this).apply {
+            text = "Re-sync"
             setTextColor(PRIMARY)
-            setPadding(dp(12), dp(8), 0, dp(8))
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            background = noBorderBackground()
+            AppFonts.apply(this, bold = true)
+            setOnClickListener { if (!busy) refreshFilesAndTable() }
+        }
+        titleRow.addView(resyncButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)).apply { marginEnd = dp(7) })
+        titleRow.addView(TextView(this).apply {
+            text = "Exvia Settings ›"
+            setTextColor(PRIMARY)
+            setPadding(dp(8), dp(8), 0, dp(8))
             AppFonts.apply(this)
             setOnClickListener { drawerRoot.openDrawer() }
         })
@@ -367,7 +407,7 @@ class MainActivity : Activity() {
             setBackgroundColor(BLACK)
         }
         body.addView(TextView(this).apply {
-            text = "Settings"
+            text = "Exvia Settings"
             textSize = 24f
             setTextColor(WHITE)
             setPadding(0, 0, 0, dp(6))
@@ -487,8 +527,16 @@ class MainActivity : Activity() {
             container.addView(styledButton("+ Add custom metric").apply { setOnClickListener { editCustomMetric(null) } }, spacedMatchWidth(4))
         }, spacedMatchWidth(12))
 
-        body.addView(styledButton("Save settings and reload").apply { setOnClickListener { saveSettings() } }, spacedMatchWidth(6))
-        body.addView(styledButton("Close Settings", accent = SECONDARY).apply { setOnClickListener { drawerRoot.closeDrawer() } }, spacedMatchWidth(6))
+        customPlotList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
+        renderCustomPlotSettings()
+        body.addView(accordion("Custom plot", tooltip = "Create plot definitions whose x and y sources can be JSON columns, cumulative statistics, or cumulative personal-finance metrics.") { container ->
+            container.addView(infoText("Source syntax: column:date, column:price, row:index, stat:price:median, finance:price:netCashFlow. Bare JSON keys are treated as columns. Each enabled definition creates History, Accumulation, and Normal distribution plots under Stat → Custom plots.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            container.addView(customPlotList, matchWidth())
+            container.addView(styledButton("+ Add custom plot").apply { setOnClickListener { editCustomPlot(null) } }, spacedMatchWidth(4))
+        }, spacedMatchWidth(12))
+
+        body.addView(styledButton("Save Exvia settings and reload").apply { setOnClickListener { saveSettings() } }, spacedMatchWidth(6))
+        body.addView(styledButton("Close Exvia Settings", accent = SECONDARY).apply { setOnClickListener { drawerRoot.closeDrawer() } }, spacedMatchWidth(6))
 
         return ScrollView(this).apply { setBackgroundColor(BLACK); addView(body, matchWidth()) }
     }
@@ -671,6 +719,102 @@ class MainActivity : Activity() {
         showDialog(dialog)
     }
 
+    private fun renderCustomPlotSettings() {
+        if (!::customPlotList.isInitialized) return
+        customPlotList.removeAllViews()
+        if (customPlotsDraft.isEmpty()) {
+            customPlotList.addView(infoText("No custom plots configured.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+            return
+        }
+        customPlotsDraft.forEach { plot ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(2), 0, dp(2))
+            }
+            row.addView(infoText("${plot.name}\n${plot.xSource} → ${plot.ySource}").apply {
+                setTextColor(if (plot.enabled) WHITE else MUTED)
+                textSize = 12f
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = if (plot.enabled) "ON" else "OFF"
+                setTextColor(if (plot.enabled) GREEN else MUTED)
+                gravity = Gravity.CENTER
+                AppFonts.apply(this, bold = true)
+                setOnClickListener {
+                    customPlotsDraft = customPlotsDraft.map { if (it.id == plot.id) it.copy(enabled = !it.enabled) else it }.toMutableList()
+                    renderCustomPlotSettings()
+                }
+            }, LinearLayout.LayoutParams(dp(44), dp(32)))
+            row.addView(TextView(this).apply {
+                text = "Edit"
+                setTextColor(PRIMARY)
+                gravity = Gravity.CENTER
+                AppFonts.apply(this)
+                setOnClickListener { editCustomPlot(plot) }
+            }, LinearLayout.LayoutParams(dp(50), dp(32)))
+            row.addView(TextView(this).apply {
+                text = "×"
+                setTextColor(RED)
+                gravity = Gravity.CENTER
+                AppFonts.apply(this, bold = true)
+                setOnClickListener {
+                    customPlotsDraft.removeAll { it.id == plot.id }
+                    renderCustomPlotSettings()
+                }
+            }, LinearLayout.LayoutParams(dp(34), dp(32)))
+            customPlotList.addView(row, matchWidth())
+        }
+    }
+
+    private fun editCustomPlot(existing: CustomPlotDefinition?) {
+        val name = styledInput("custom_plot.name").apply { setText(existing?.name.orEmpty()) }
+        val xSource = styledInput("custom_plot.x_source").apply { setText(existing?.xSource ?: "column:date") }
+        val ySource = styledInput("custom_plot.y_source").apply { setText(existing?.ySource ?: "column:price") }
+        var enabled = existing?.enabled ?: true
+        val enabledButton = styledButton(if (enabled) "Enabled" else "Disabled").apply {
+            setOnClickListener {
+                enabled = !enabled
+                text = if (enabled) "Enabled" else "Disabled"
+                setTextColor(if (enabled) GREEN else MUTED)
+            }
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+            addView(infoText("Examples:\nX: column:date | row:index | stat:price:n\nY: column:price | stat:price:median | finance:price:netCashFlow").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(name, spacedMatchWidth(5))
+            addView(xSource, spacedMatchWidth(5))
+            addView(ySource, spacedMatchWidth(5))
+            addView(enabledButton, matchWidth())
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "New custom plot" else "Edit custom plot")
+            .setView(body)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val n = name.text.toString().trim()
+                val x = xSource.text.toString().trim()
+                val y = ySource.text.toString().trim()
+                if (n.isBlank()) { name.error = "Name is required"; return@setOnClickListener }
+                if (x.isBlank()) { xSource.error = "X source is required"; return@setOnClickListener }
+                if (y.isBlank()) { ySource.error = "Y source is required"; return@setOnClickListener }
+                val next = CustomPlotDefinition(existing?.id ?: UUID.randomUUID().toString(), n, x, y, enabled)
+                customPlotsDraft = if (existing == null) {
+                    (customPlotsDraft + next).toMutableList()
+                } else {
+                    customPlotsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
+                }
+                renderCustomPlotSettings()
+                dialog.dismiss()
+            }
+        }
+        showDialog(dialog)
+    }
+
     private fun saveSettings() {
         val paletteInputs = listOf(primarySetting to "Primary", secondarySetting to "Secondary", tertiarySetting to "Tertiary", quaternarySetting to "Quaternary", quinarySetting to "Quinary", senarySetting to "Senary")
         var invalid = false
@@ -695,6 +839,7 @@ class MainActivity : Activity() {
             plotColumns = SettingsStore.parseColumnList(plotColumnsSetting.text.toString()),
             financeColumns = SettingsStore.parseColumnList(financeColumnsSetting.text.toString()),
             customMetrics = customMetricsDraft.toList(),
+            customPlots = customPlotsDraft.toList(),
             themePreset = selectedTheme,
             palette = ThemePalette(primarySetting.text.toString().trim(), secondarySetting.text.toString().trim(), tertiarySetting.text.toString().trim(), quaternarySetting.text.toString().trim(), quinarySetting.text.toString().trim(), senarySetting.text.toString().trim()),
         )
@@ -776,9 +921,43 @@ class MainActivity : Activity() {
         showDialog(dialog)
     }
 
+    private fun loadCachedOrRefresh() {
+        val token = requireToken() ?: return
+        val cachedFiles = fileCache.loadFiles(settings)
+        if (cachedFiles == null) {
+            refreshFilesAndTable()
+            return
+        }
+        val savedPath = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_SELECTED_PATH, null)
+        val defaultPath = settings.pathFor(settings.defaultJson)
+        val selected = cachedFiles.firstOrNull { it.path == savedPath }
+            ?: cachedFiles.firstOrNull { it.path == defaultPath }
+            ?: cachedFiles.firstOrNull()
+        val cachedFile = selected?.let { fileCache.loadFile(settings, it.path) }
+        val cacheMatchesIndex = selected == null || cachedFile == null || selected.sha.isBlank() || cachedFile.sha == selected.sha
+        if (selected != null && (cachedFile == null || !cacheMatchesIndex)) {
+            files = cachedFiles
+            setSelectedPath(selected.path)
+            renderFiles()
+            refreshSelected(forceNetwork = true)
+            return
+        }
+        val data = cachedFile?.let { GitHubApi(token, settings).parseCachedTable(it.text) }
+            ?: TableData(emptyList(), emptyList(), null, null, null, null)
+        files = cachedFiles
+        setSelectedPath(selected?.path)
+        renderFiles()
+        applyTableData(data)
+        statusText.text = when {
+            selected == null -> "Loaded cached file list. No JSON files are available."
+            else -> "Loaded ${data.rows.size} row(s) from local cache: ${selected.name}."
+        }
+        setBusy(false)
+    }
+
     private fun refreshFilesAndTable() {
         val token = requireToken() ?: return
-        setBusy(true, "Loading ${settings.folder.ifBlank { "/" }}/…")
+        setBusy(true, "Re-syncing ${settings.folder.ifBlank { "/" }}/ with GitHub…")
         executor.execute {
             try {
                 val api = GitHubApi(token, settings)
@@ -788,31 +967,64 @@ class MainActivity : Activity() {
                 val selected = loadedFiles.firstOrNull { it.path == savedPath }
                     ?: loadedFiles.firstOrNull { it.path == defaultPath }
                     ?: loadedFiles.firstOrNull()
-                val data = selected?.let { api.fetchTable(it.path) } ?: TableData(emptyList(), emptyList(), null, null, null, null)
+                val fetched = selected?.let { api.fetchTableFile(it.path) }
+                fileCache.saveFiles(settings, loadedFiles)
+                fetched?.first?.let { fileCache.saveFile(settings, it) }
+                val data = fetched?.second ?: TableData(emptyList(), emptyList(), null, null, null, null)
                 runOnUiThread {
                     files = loadedFiles
                     setSelectedPath(selected?.path)
                     renderFiles()
                     applyTableData(data)
-                    statusText.text = if (selected == null) "No .json files found in ${settings.folder}/." else "Loaded ${data.rows.size} row(s) from ${selected.name}."
+                    statusText.text = if (selected == null) {
+                        "Re-sync complete. No .json files found in ${settings.folder}/."
+                    } else {
+                        "Re-synced ${data.rows.size} row(s) from ${selected.name}."
+                    }
                     setBusy(false)
                 }
             } catch (e: Exception) {
-                runOnUiThread { handleError(e, "Could not load files") }
+                runOnUiThread {
+                    val cachedFiles = fileCache.loadFiles(settings)
+                    if (cachedFiles != null) {
+                        files = cachedFiles
+                        renderFiles()
+                    }
+                    handleError(e, "Automatic GitHub sync failed")
+                }
             }
         }
     }
 
-    private fun refreshSelected(successMessage: String? = null) {
+    private fun refreshSelected(successMessage: String? = null, forceNetwork: Boolean = false) {
         val path = selectedPath ?: return
         val token = requireToken() ?: return
-        setBusy(true, "Loading ${path.substringAfterLast('/')}…")
+        if (!forceNetwork) {
+            fileCache.loadFile(settings, path)?.takeIf { cached ->
+                val indexedSha = files.firstOrNull { it.path == path }?.sha.orEmpty()
+                indexedSha.isBlank() || indexedSha == cached.sha
+            }?.let { cached ->
+                try {
+                    val data = GitHubApi(token, settings).parseCachedTable(cached.text)
+                    applyTableData(data)
+                    statusText.text = successMessage ?: "Loaded ${data.rows.size} row(s) from local cache: ${path.substringAfterLast('/')}"
+                    setBusy(false)
+                    return
+                } catch (_: Exception) {
+                    fileCache.removeFile(settings, path)
+                }
+            }
+        }
+        setBusy(true, "Fetching ${path.substringAfterLast('/')} from GitHub…")
         executor.execute {
             try {
-                val data = GitHubApi(token, settings).fetchTable(path)
+                val fetched = GitHubApi(token, settings).fetchTableFile(path)
+                fileCache.saveFile(settings, fetched.first)
+                files = files.map { if (it.path == path) it.copy(sha = fetched.first.sha) else it }
+                fileCache.saveFiles(settings, files)
                 runOnUiThread {
-                    applyTableData(data)
-                    statusText.text = successMessage ?: "Loaded ${data.rows.size} row(s) from ${path.substringAfterLast('/')}."
+                    applyTableData(fetched.second)
+                    statusText.text = successMessage ?: "Fetched and cached ${fetched.second.rows.size} row(s) from ${path.substringAfterLast('/')}."
                     setBusy(false)
                 }
             } catch (e: Exception) {
@@ -1052,10 +1264,13 @@ class MainActivity : Activity() {
                     try {
                         val api = GitHubApi(token, settings)
                         val date = api.appendRow(path, values)
-                        val data = api.fetchTable(path)
+                        val fetched = api.fetchTableFile(path)
+                        fileCache.saveFile(settings, fetched.first)
+                        files = files.map { if (it.path == path) it.copy(sha = fetched.first.sha) else it }
+                        fileCache.saveFiles(settings, files)
                         runOnUiThread {
-                            applyTableData(data)
-                            statusText.text = "Committed at $date."
+                            applyTableData(fetched.second)
+                            statusText.text = "Committed and cached at $date."
                             setBusy(false)
                         }
                     } catch (e: Exception) {
@@ -1129,8 +1344,11 @@ class MainActivity : Activity() {
                     try {
                         val api = GitHubApi(token, settings)
                         api.updateRow(path, row, values)
-                        val data = api.fetchTable(path)
-                        runOnUiThread { applyTableData(data); statusText.text = "Row updated."; setBusy(false) }
+                        val fetched = api.fetchTableFile(path)
+                        fileCache.saveFile(settings, fetched.first)
+                        files = files.map { if (it.path == path) it.copy(sha = fetched.first.sha) else it }
+                        fileCache.saveFiles(settings, files)
+                        runOnUiThread { applyTableData(fetched.second); statusText.text = "Row updated and cache refreshed."; setBusy(false) }
                     } catch (e: Exception) {
                         runOnUiThread { handleError(e, "Update failed") }
                     }
@@ -1154,8 +1372,11 @@ class MainActivity : Activity() {
                     try {
                         val api = GitHubApi(token, settings)
                         api.deleteRow(path, row)
-                        val data = api.fetchTable(path)
-                        runOnUiThread { applyTableData(data); statusText.text = "Row deleted."; setBusy(false) }
+                        val fetched = api.fetchTableFile(path)
+                        fileCache.saveFile(settings, fetched.first)
+                        files = files.map { if (it.path == path) it.copy(sha = fetched.first.sha) else it }
+                        fileCache.saveFiles(settings, files)
+                        runOnUiThread { applyTableData(fetched.second); statusText.text = "Row deleted and cache refreshed."; setBusy(false) }
                     } catch (e: Exception) {
                         runOnUiThread { handleError(e, "Delete failed") }
                     }
@@ -1243,6 +1464,48 @@ class MainActivity : Activity() {
             }, matchWidth())
         }
 
+        val enabledCustomPlots = customPlotsDraft.filter { it.enabled }
+        if (enabledCustomPlots.isNotEmpty()) {
+            statContent.addView(accordion("Custom plots", tooltip = "User-configured plots whose axes can come from JSON columns, cumulative statistics, or cumulative finance metrics.") { customRoot ->
+                enabledCustomPlots.forEach { definition ->
+                    customRoot.addView(accordion(definition.name, tooltip = "X = ${definition.xSource}; Y = ${definition.ySource}. Uses the currently visible/filtered rows.") { plotRoot ->
+                        when (val resolved = CustomPlotEngine.build(data, definition)) {
+                            is CustomPlotEngine.Result.Error -> plotRoot.addView(infoText(resolved.message).apply { setTextColor(RED) }, matchWidth())
+                            is CustomPlotEngine.Result.Success -> {
+                                val series = resolved.series
+                                plotRoot.addView(accordion("History", initiallyOpen = true, tooltip = "Cumulative box timeline for ${series.yDescription} against ${series.xDescription}.") { box ->
+                                    val history = CumulativeBoxPlotView(this@MainActivity).apply {
+                                        setPalette(BLACK, MUTED, WHITE, SURFACE)
+                                        setXAxis(series.timeAxis, series.xLabels)
+                                        setSeries(Statistics.cumulativeBoxSeries(series.points))
+                                    }
+                                    box.addView(history, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340)))
+                                    box.addView(infoText("X: ${series.xDescription} · Y: ${series.yDescription}. Raw column y-values sharing the same date are summed; statistic/finance y-values are evaluated cumulatively per progression step.").apply { setTextColor(MUTED) }, matchWidth())
+                                }, matchWidth())
+                                plotRoot.addView(accordion("Accumulation", tooltip = "Running sum of the resolved custom y-series.") { box ->
+                                    val accumulation = Statistics.cumulativeTotalSeries(series.points)
+                                    val view = InteractiveLinePlotView(this@MainActivity).apply {
+                                        setPalette(BLACK, MUTED, WHITE, SURFACE, Color.rgb(61, 139, 255))
+                                        setSeries(accumulation.map { it.first.toDouble() to it.second }, if (series.timeAxis) InteractiveLinePlotView.AxisKind.TIME else InteractiveLinePlotView.AxisKind.NUMBER)
+                                    }
+                                    box.addView(view, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(230)))
+                                }, matchWidth())
+                                plotRoot.addView(accordion("Normal distribution", tooltip = "Normal probability-density curve fitted to the resolved custom y-series.") { box ->
+                                    val values = series.points.map { it.second }
+                                    val curve = Statistics.normalDistribution(values)
+                                    val view = InteractiveLinePlotView(this@MainActivity).apply {
+                                        setPalette(BLACK, MUTED, WHITE, SURFACE, STAT_QUARTILE)
+                                        setSeries(curve, InteractiveLinePlotView.AxisKind.NUMBER, rugSamples = values)
+                                    }
+                                    box.addView(view, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(230)))
+                                }, matchWidth())
+                            }
+                        }
+                    }, matchWidth())
+                }
+            }, matchWidth())
+        }
+
         val enabledCustom = customMetricsDraft.filter { it.enabled }
         if (enabledCustom.isNotEmpty()) {
             statContent.addView(accordion("Custom", tooltip = "User-defined JavaScript metrics evaluated locally against the currently visible/filtered JSON rows through jsonFile.content.") { container ->
@@ -1277,7 +1540,7 @@ class MainActivity : Activity() {
             addFinancialMetric(c, "Net Cash Flow", amount(finance.netCashFlow), "Income minus expenses. Positive means the visible period generated surplus cash.", signed = finance.netCashFlow)
             addFinancialMetric(c, "Savings Rate", pct(finance.savingsRate), "Net cash flow as a percentage of income. Higher positive values indicate more income retained.", signed = finance.savingsRate)
             addFinancialMetric(c, "Expense Ratio", pct(finance.expenseRatio), "Expenses divided by income. Values above 100% mean spending exceeded income.", signed = finance.expenseRatio?.let { 100.0 - it })
-            addFinancialMetric(c, "Emergency Fund", months(finance.emergencyFundMonths), "Estimated months of average spending covered by the observed positive surplus. This is not an account balance because exp_tracker does not know assets outside the selected rows.")
+            addFinancialMetric(c, "Emergency Fund", months(finance.emergencyFundMonths), "Estimated months of average spending covered by the observed positive surplus. This is not an account balance because Exvia does not know assets outside the selected rows.")
             addFinancialMetric(c, "Debt-To-Income ratio", pct(finance.debtToIncomeRatio), "Heuristic debt burden: expenses whose row text mentions debt, loan, credit, or mortgage divided by income.")
             addFinancialMetric(c, "Total Income", amount(finance.totalIncome), "Total value of rows whose money value begins with + in the visible dataset.", signed = finance.totalIncome)
             addFinancialMetric(c, "Total Expenses", amount(finance.totalExpenses), "Total absolute value of non-+ money rows in the visible dataset.")
@@ -1528,12 +1791,14 @@ class MainActivity : Activity() {
                         val api = GitHubApi(token, settings)
                         val created = api.createExpenseFile(name)
                         val loadedFiles = api.listExpenseFiles()
-                        val data = api.fetchTable(created.path)
+                        val fetched = api.fetchTableFile(created.path)
+                        fileCache.saveFiles(settings, loadedFiles)
+                        fileCache.saveFile(settings, fetched.first)
                         runOnUiThread {
                             files = loadedFiles
                             setSelectedPath(created.path)
                             renderFiles()
-                            applyTableData(data)
+                            applyTableData(fetched.second)
                             showTab(Tab.TABLE)
                             statusText.text = "Created and selected ${created.name}."
                             setBusy(false)
@@ -1562,8 +1827,21 @@ class MainActivity : Activity() {
                         val api = GitHubApi(token, settings)
                         api.deleteExpenseFile(file)
                         val loadedFiles = api.listExpenseFiles()
+                        fileCache.removeFile(settings, file.path)
+                        fileCache.saveFiles(settings, loadedFiles)
                         val next = loadedFiles.firstOrNull()
-                        val data = next?.let { api.fetchTable(it.path) } ?: TableData(emptyList(), emptyList(), null, null, null, null)
+                        val data = if (next == null) {
+                            TableData(emptyList(), emptyList(), null, null, null, null)
+                        } else {
+                            val cached = fileCache.loadFile(settings, next.path)
+                            if (cached != null) {
+                                api.parseCachedTable(cached.text)
+                            } else {
+                                val fetched = api.fetchTableFile(next.path)
+                                fileCache.saveFile(settings, fetched.first)
+                                fetched.second
+                            }
+                        }
                         runOnUiThread {
                             files = loadedFiles
                             setSelectedPath(next?.path)
@@ -1682,6 +1960,10 @@ class MainActivity : Activity() {
         if (::amendButton.isInitialized) amendButton.isEnabled = !isBusy && selectedPath != null
         if (::createFileButton.isInitialized) createFileButton.isEnabled = !isBusy
         if (::removeFileButton.isInitialized) removeFileButton.isEnabled = !isBusy && selectedPath != null
+        if (::resyncButton.isInitialized) {
+            resyncButton.isEnabled = !isBusy
+            resyncButton.alpha = if (isBusy) 0.45f else 1f
+        }
         formInputs.values.forEach { it.isEnabled = !isBusy }
         if (message != null) statusText.text = message
     }
@@ -1703,7 +1985,11 @@ class MainActivity : Activity() {
             }
             else -> ""
         }
-        statusText.text = "$prefix: ${error.message ?: error.javaClass.simpleName}.$extra"
+        statusText.text = "$prefix: ${error.message ?: error.javaClass.simpleName}.$extra Tap Re-sync to retry."
+        if (::resyncButton.isInitialized) {
+            resyncButton.setTextColor(PRIMARY)
+            resyncButton.background = activeButtonBackground(PRIMARY)
+        }
     }
 
     private fun showDialog(dialog: AlertDialog) {

@@ -8,6 +8,27 @@ import java.util.UUID
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    init {
+        // Preserve settings from exp_tracker when upgrading to the Exvia name.
+        if (prefs.all.isEmpty()) {
+            val legacy = context.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE)
+            if (legacy.all.isNotEmpty()) {
+                val editor = prefs.edit()
+                legacy.all.forEach { (key, value) ->
+                    when (value) {
+                        is String -> editor.putString(key, value)
+                        is Boolean -> editor.putBoolean(key, value)
+                        is Int -> editor.putInt(key, value)
+                        is Long -> editor.putLong(key, value)
+                        is Float -> editor.putFloat(key, value)
+                        else -> Unit
+                    }
+                }
+                editor.apply()
+            }
+        }
+    }
+
     fun load(): RepoSettings {
         val preset = ThemePreset.fromId(prefs.getString(KEY_THEME_PRESET, ThemePreset.DEFAULT.id))
         val defaults = ThemePalette.preset(preset)
@@ -36,6 +57,7 @@ class SettingsStore(context: Context) {
             plotColumns = parseColumnList(prefs.getString(KEY_PLOT_COLUMNS, "price") ?: "price"),
             financeColumns = parseColumnList(prefs.getString(KEY_FINANCE_COLUMNS, "price") ?: "price"),
             customMetrics = parseCustomMetrics(prefs.getString(KEY_CUSTOM_METRICS, "[]") ?: "[]"),
+            customPlots = parseCustomPlots(prefs.getString(KEY_CUSTOM_PLOTS, "[]") ?: "[]"),
             themePreset = preset,
             palette = palette,
         )
@@ -57,6 +79,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_PLOT_COLUMNS, settings.plotColumns.joinToString(", "))
             .putString(KEY_FINANCE_COLUMNS, settings.financeColumns.joinToString(", "))
             .putString(KEY_CUSTOM_METRICS, customMetricsToJson(settings.customMetrics))
+            .putString(KEY_CUSTOM_PLOTS, customPlotsToJson(settings.customPlots))
             .putString(KEY_THEME_PRESET, settings.themePreset.id)
             .putString(KEY_PRIMARY, settings.palette.primary)
             .putString(KEY_SECONDARY, settings.palette.secondary)
@@ -74,7 +97,8 @@ class SettingsStore(context: Context) {
     fun saveFilterSnippets(items: List<FilterSnippet>) { prefs.edit().putString(KEY_FILTER_SNIPPETS, filterSnippetsToJson(items)).apply() }
 
     companion object {
-        private const val PREFS = "exp_tracker_settings"
+        private const val PREFS = "exvia_settings"
+        private const val LEGACY_PREFS = "exp_tracker_settings"
         private const val KEY_OWNER = "owner"
         private const val KEY_REPO = "repo"
         private const val KEY_BRANCH = "branch"
@@ -89,6 +113,7 @@ class SettingsStore(context: Context) {
         private const val KEY_PLOT_COLUMNS = "plot_columns"
         private const val KEY_FINANCE_COLUMNS = "finance_columns"
         private const val KEY_CUSTOM_METRICS = "custom_metrics"
+        private const val KEY_CUSTOM_PLOTS = "custom_plots"
         private const val KEY_FILTER_SNIPPETS = "filter_snippets"
         private const val KEY_REPO_INIT_ASKED = "repo_initialization_asked"
         private const val KEY_THEME_PRESET = "theme_preset"
@@ -137,6 +162,35 @@ class SettingsStore(context: Context) {
         private fun customMetricsToJson(items: List<CustomMetricDefinition>): String = JSONArray().apply {
             items.forEach { item -> put(JSONObject().apply {
                 put("id", item.id); put("name", item.name); put("script", item.script); put("enabled", item.enabled)
+            }) }
+        }.toString()
+
+
+        private fun parseCustomPlots(text: String): List<CustomPlotDefinition> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim()
+                val xSource = obj.optString("xSource").trim()
+                val ySource = obj.optString("ySource").trim()
+                if (name.isBlank() || xSource.isBlank() || ySource.isBlank()) return@mapNotNull null
+                CustomPlotDefinition(
+                    id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                    name = name,
+                    xSource = xSource,
+                    ySource = ySource,
+                    enabled = obj.optBoolean("enabled", true),
+                )
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun customPlotsToJson(items: List<CustomPlotDefinition>): String = JSONArray().apply {
+            items.forEach { item -> put(JSONObject().apply {
+                put("id", item.id)
+                put("name", item.name)
+                put("xSource", item.xSource)
+                put("ySource", item.ySource)
+                put("enabled", item.enabled)
             }) }
         }.toString()
 
