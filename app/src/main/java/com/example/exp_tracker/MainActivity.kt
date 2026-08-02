@@ -135,6 +135,10 @@ class MainActivity : Activity() {
     private lateinit var plotOutlierSetting: EditText
     private lateinit var plotCenterSetting: EditText
     private lateinit var plotAccentSetting: EditText
+    private lateinit var plotSelectionSetting: EditText
+    private lateinit var plotTooltipBackgroundSetting: EditText
+    private lateinit var plotTooltipTextSetting: EditText
+    private lateinit var plotTooltipBorderSetting: EditText
     private lateinit var reportRepoSetting: EditText
     private lateinit var uiScaleSetting: EditText
     private lateinit var textScaleSetting: EditText
@@ -561,6 +565,14 @@ class MainActivity : Activity() {
         plotCenterSetting = plotCenter.input
         val plotAccent = colorConfigField("Accent", "plot.accent", settings.plotTheme.accent, "Accumulation, distribution, and custom-plot accent.")
         plotAccentSetting = plotAccent.input
+        val plotSelection = colorConfigField("Selected node", "plot.selection", settings.plotTheme.selection, "Ring/highlight color used for a tapped and pinned graph node.")
+        plotSelectionSetting = plotSelection.input
+        val plotTooltipBackground = colorConfigField("Tooltip background", "plot.tooltip_background", settings.plotTheme.tooltipBackground, "Pinned graph-tooltip background color.")
+        plotTooltipBackgroundSetting = plotTooltipBackground.input
+        val plotTooltipText = colorConfigField("Tooltip text", "plot.tooltip_text", settings.plotTheme.tooltipText, "Pinned graph-tooltip text color.")
+        plotTooltipTextSetting = plotTooltipText.input
+        val plotTooltipBorder = colorConfigField("Tooltip border", "plot.tooltip_border", settings.plotTheme.tooltipBorder, "Pinned graph-tooltip border color.")
+        plotTooltipBorderSetting = plotTooltipBorder.input
 
         themeSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, ThemePreset.entries.map { it.displayName })
@@ -621,6 +633,7 @@ class MainActivity : Activity() {
                 plotBackground.wrapper, plotSurface.wrapper, plotText.wrapper, plotMuted.wrapper,
                 plotGrid.wrapper, plotAxis.wrapper, plotPositive.wrapper, plotNegative.wrapper,
                 plotObservation.wrapper, plotOutlier.wrapper, plotCenter.wrapper, plotAccent.wrapper,
+                plotSelection.wrapper, plotTooltipBackground.wrapper, plotTooltipText.wrapper, plotTooltipBorder.wrapper,
             ).forEach { container.addView(it, spacedMatchWidth(5)) }
         }, spacedMatchWidth(10))
 
@@ -769,6 +782,10 @@ class MainActivity : Activity() {
         plotOutlierSetting.setText(theme.outlier)
         plotCenterSetting.setText(theme.center)
         plotAccentSetting.setText(theme.accent)
+        plotSelectionSetting.setText(theme.selection)
+        plotTooltipBackgroundSetting.setText(theme.tooltipBackground)
+        plotTooltipTextSetting.setText(theme.tooltipText)
+        plotTooltipBorderSetting.setText(theme.tooltipBorder)
     }
 
     private fun renderCustomMetricSettings() {
@@ -975,6 +992,8 @@ return Plot.plot({
             plotAxisSetting to "Plot axis", plotPositiveSetting to "Plot positive", plotNegativeSetting to "Plot negative",
             plotObservationSetting to "Plot observation", plotOutlierSetting to "Plot outlier",
             plotCenterSetting to "Plot center", plotAccentSetting to "Plot accent",
+            plotSelectionSetting to "Plot selection", plotTooltipBackgroundSetting to "Plot tooltip background",
+            plotTooltipTextSetting to "Plot tooltip text", plotTooltipBorderSetting to "Plot tooltip border",
         )
         plotThemeInputs.forEach { (input, label) ->
             if (!PlotTheme.isValid(input.text.toString().trim())) {
@@ -1011,7 +1030,7 @@ return Plot.plot({
             financeColumns = SettingsStore.parseColumnList(financeColumnsSetting.text.toString()),
             customMetrics = customMetricsDraft.toList(),
             customPlots = customPlotsDraft.toList(),
-            reportRepo = reportRepoSetting.text.toString().trim().ifBlank { "Exvia" },
+            reportRepo = reportRepoSetting.text.toString().trim().ifBlank { "finance_app" },
             uiScale = uiScale!!,
             textScale = textScale!!,
             themePreset = selectedTheme,
@@ -1032,6 +1051,10 @@ return Plot.plot({
                 outlier = plotOutlierSetting.text.toString().trim(),
                 center = plotCenterSetting.text.toString().trim(),
                 accent = plotAccentSetting.text.toString().trim(),
+                selection = plotSelectionSetting.text.toString().trim(),
+                tooltipBackground = plotTooltipBackgroundSetting.text.toString().trim(),
+                tooltipText = plotTooltipTextSetting.text.toString().trim(),
+                tooltipBorder = plotTooltipBorderSetting.text.toString().trim(),
             ),
         )
         settingsStore.save(next)
@@ -1084,11 +1107,16 @@ return Plot.plot({
             return
         }
         val categories = listOf("Bug", "Enhancement", "Feature")
+        val issueLabels = listOf("#bug", "#ench", "#feat")
         val typeSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, categories)
             backgroundTintList = inputTint()
         }
-        val reportInput = styledInput("report.description").apply {
+        val titleInput = styledInput("report.title").apply {
+            isSingleLine = true
+            hint = "Issue title"
+        }
+        val descriptionInput = styledInput("report.description").apply {
             isSingleLine = false
             minLines = 6
             gravity = Gravity.TOP
@@ -1098,9 +1126,10 @@ return Plot.plot({
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, dp(14), 0)
             setBackgroundColor(BLACK)
-            addView(infoText("Reports are created as GitHub Issues in ${settings.owner}/${settings.reportRepo}.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(infoText("Reports are created as GitHub Issues in ${settings.owner}/${settings.reportRepo}. The selected type is attached as an issue label.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
             addView(typeSpinner, spacedMatchWidth(6))
-            addView(reportInput, matchWidth())
+            addView(titleInput, spacedMatchWidth(6))
+            addView(descriptionInput, matchWidth())
         }
         val dialog = AlertDialog.Builder(this)
             .setTitle("Report")
@@ -1110,25 +1139,23 @@ return Plot.plot({
             .create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val description = reportInput.text.toString().trim()
-                if (description.isBlank()) {
-                    reportInput.error = "Describe the report"
+                val issueTitle = titleInput.text.toString().trim()
+                val description = descriptionInput.text.toString().trim()
+                if (issueTitle.isBlank()) {
+                    titleInput.error = "Enter an issue title"
                     return@setOnClickListener
                 }
-                val prefix = when (typeSpinner.selectedItemPosition) {
-                    0 -> "bug:"
-                    1 -> "ench:"
-                    else -> "feat:"
+                if (description.isBlank()) {
+                    descriptionInput.error = "Describe the report"
+                    return@setOnClickListener
                 }
-                val summary = description.lineSequence().firstOrNull { it.isNotBlank() }
-                    ?.trim()?.replace(Regex("\\s+"), " ")?.take(90)
-                    .orEmpty().ifBlank { categories[typeSpinner.selectedItemPosition] }
-                val issueTitle = "$prefix $summary"
+                val selectedIndex = typeSpinner.selectedItemPosition.coerceIn(categories.indices)
+                val issueLabel = issueLabels[selectedIndex]
                 val issueBody = buildString {
                     append(description)
                     append("\n\n---\n")
-                    append("Submitted from Exvia 1.11\n")
-                    append("Classification: ${categories[typeSpinner.selectedItemPosition]}\n")
+                    append("Submitted from Exvia 1.12.2\n")
+                    append("Classification: ${categories[selectedIndex]} ($issueLabel)\n")
                     append("Data repository: ${settings.owner}/${settings.repo}\n")
                     append("Branch: ${settings.branch}\n")
                     append("Developer Options: ${if (developerMode) "enabled" else "hidden"}\n")
@@ -1138,10 +1165,11 @@ return Plot.plot({
                 executor.execute {
                     try {
                         val url = GitHubApi(token, settings).createIssue(
-                            settings.owner,
-                            settings.reportRepo,
-                            issueTitle,
-                            issueBody,
+                            targetOwner = settings.owner,
+                            targetRepo = settings.reportRepo,
+                            title = issueTitle,
+                            bodyText = issueBody,
+                            labels = listOf(issueLabel),
                         )
                         runOnUiThread {
                             setBusy(false)

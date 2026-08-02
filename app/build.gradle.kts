@@ -10,8 +10,8 @@ android {
         applicationId = "com.example.exp_tracker"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "1.12.1"
+        versionCode = 15
+        versionName = "1.12.2"
         val hasExistingLogo = file("src/main/assets/logo.png").exists() ||
             file("src/main/res/drawable-nodpi/exvia_logo.png").exists()
         manifestPlaceholders["exviaAppIcon"] = if (hasExistingLogo) "@drawable/exvia_logo" else "@android:drawable/sym_def_app_icon"

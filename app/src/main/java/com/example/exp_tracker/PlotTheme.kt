@@ -18,6 +18,10 @@ data class PlotTheme(
     val outlier: String = "#F72323",
     val center: String = "#FFFFFF",
     val accent: String = "#A970FF",
+    val selection: String = "#59C2FF",
+    val tooltipBackground: String = "#11151C",
+    val tooltipText: String = "#EDEDED",
+    val tooltipBorder: String = "#F72323",
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("background", background)
@@ -32,6 +36,10 @@ data class PlotTheme(
         put("outlier", outlier)
         put("center", center)
         put("accent", accent)
+        put("selection", selection)
+        put("tooltipBackground", tooltipBackground)
+        put("tooltipText", tooltipText)
+        put("tooltipBorder", tooltipBorder)
     }
 
     fun backgroundColor(): Int = safe(background, "#000000")
@@ -52,6 +60,10 @@ data class PlotTheme(
             outlier = "#F07178",
             center = "#FFFFFF",
             accent = "#D2A6FF",
+            selection = "#FFB454",
+            tooltipBackground = "#131721",
+            tooltipText = "#E6E1CF",
+            tooltipBorder = "#FF8F40",
         )
 
         fun isValid(value: String): Boolean = ThemePalette.isValidHex(value)

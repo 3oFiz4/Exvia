@@ -54,6 +54,10 @@ class SettingsStore(context: Context) {
             outlier = prefs.getString(KEY_PLOT_OUTLIER, plotDefaults.outlier) ?: plotDefaults.outlier,
             center = prefs.getString(KEY_PLOT_CENTER, plotDefaults.center) ?: plotDefaults.center,
             accent = prefs.getString(KEY_PLOT_ACCENT, plotDefaults.accent) ?: plotDefaults.accent,
+            selection = prefs.getString(KEY_PLOT_SELECTION, plotDefaults.selection) ?: plotDefaults.selection,
+            tooltipBackground = prefs.getString(KEY_PLOT_TOOLTIP_BACKGROUND, plotDefaults.tooltipBackground) ?: plotDefaults.tooltipBackground,
+            tooltipText = prefs.getString(KEY_PLOT_TOOLTIP_TEXT, plotDefaults.tooltipText) ?: plotDefaults.tooltipText,
+            tooltipBorder = prefs.getString(KEY_PLOT_TOOLTIP_BORDER, plotDefaults.tooltipBorder) ?: plotDefaults.tooltipBorder,
         )
         return RepoSettings(
             owner = prefs.getString(KEY_OWNER, RepoConfig.OWNER) ?: RepoConfig.OWNER,
@@ -121,6 +125,10 @@ class SettingsStore(context: Context) {
             .putString(KEY_PLOT_OUTLIER, settings.plotTheme.outlier)
             .putString(KEY_PLOT_CENTER, settings.plotTheme.center)
             .putString(KEY_PLOT_ACCENT, settings.plotTheme.accent)
+            .putString(KEY_PLOT_SELECTION, settings.plotTheme.selection)
+            .putString(KEY_PLOT_TOOLTIP_BACKGROUND, settings.plotTheme.tooltipBackground)
+            .putString(KEY_PLOT_TOOLTIP_TEXT, settings.plotTheme.tooltipText)
+            .putString(KEY_PLOT_TOOLTIP_BORDER, settings.plotTheme.tooltipBorder)
             .apply()
     }
 
@@ -177,6 +185,10 @@ class SettingsStore(context: Context) {
         private const val KEY_PLOT_OUTLIER = "plot_theme_outlier"
         private const val KEY_PLOT_CENTER = "plot_theme_center"
         private const val KEY_PLOT_ACCENT = "plot_theme_accent"
+        private const val KEY_PLOT_SELECTION = "plot_theme_selection"
+        private const val KEY_PLOT_TOOLTIP_BACKGROUND = "plot_theme_tooltip_background"
+        private const val KEY_PLOT_TOOLTIP_TEXT = "plot_theme_tooltip_text"
+        private const val KEY_PLOT_TOOLTIP_BORDER = "plot_theme_tooltip_border"
 
         fun parseTickerColors(text: String): Map<String, String> {
             val result = linkedMapOf<String, String>()
@@ -246,6 +258,10 @@ class SettingsStore(context: Context) {
                 put("outlier", settings.plotTheme.outlier)
                 put("center", settings.plotTheme.center)
                 put("accent", settings.plotTheme.accent)
+                put("selection", settings.plotTheme.selection)
+                put("tooltipBackground", settings.plotTheme.tooltipBackground)
+                put("tooltipText", settings.plotTheme.tooltipText)
+                put("tooltipBorder", settings.plotTheme.tooltipBorder)
             })
             put("customMetrics", JSONArray(customMetricsToJson(settings.customMetrics)))
             put("customPlots", JSONArray(customPlotsToJson(settings.customPlots)))

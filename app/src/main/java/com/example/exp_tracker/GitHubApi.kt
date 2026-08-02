@@ -54,17 +54,55 @@ class GitHubApi(
         putFile(path, text, sha, message)
     }
 
-    /** Creates an issue in the requested repository using the current PAT. */
-    fun createIssue(targetOwner: String, targetRepo: String, title: String, bodyText: String): String {
+    /** Creates an issue and applies the requested GitHub labels using the current PAT. */
+    fun createIssue(
+        targetOwner: String,
+        targetRepo: String,
+        title: String,
+        bodyText: String,
+        labels: List<String> = emptyList(),
+    ): String {
         require(targetOwner.isNotBlank()) { "Issue owner is required." }
         require(targetRepo.isNotBlank()) { "Issue repository is required." }
         require(title.isNotBlank()) { "Issue title is required." }
+        val normalizedLabels = labels.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        normalizedLabels.forEach { ensureIssueLabel(targetOwner, targetRepo, it) }
+
         val url = "https://api.github.com/repos/${encodeSegment(targetOwner)}/${encodeSegment(targetRepo)}/issues"
         val response = JSONObject(request("POST", url, JSONObject().apply {
             put("title", title)
             put("body", bodyText)
+            if (normalizedLabels.isNotEmpty()) {
+                put("labels", JSONArray().apply { normalizedLabels.forEach { put(it) } })
+            }
         }.toString()))
         return response.optString("html_url")
+    }
+
+    private fun ensureIssueLabel(targetOwner: String, targetRepo: String, label: String) {
+        val repoUrl = "https://api.github.com/repos/${encodeSegment(targetOwner)}/${encodeSegment(targetRepo)}"
+        try {
+            request("GET", "$repoUrl/labels/${encodeSegment(label)}")
+            return
+        } catch (error: GitHubHttpException) {
+            if (error.statusCode != 404) throw error
+        }
+        val color = when (label.lowercase()) {
+            "#bug" -> "F72323"
+            "#feat" -> "34C759"
+            "#ench" -> "A970FF"
+            else -> "7D7D7D"
+        }
+        try {
+            request("POST", "$repoUrl/labels", JSONObject().apply {
+                put("name", label)
+                put("color", color)
+                put("description", "Exvia report classification: $label")
+            }.toString())
+        } catch (error: GitHubHttpException) {
+            // 422 can happen when another client creates the same label concurrently.
+            if (error.statusCode != 422) throw error
+        }
     }
 
     fun fetchTable(path: String): TableData = parseTable(getFile(path).text)

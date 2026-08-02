@@ -8,6 +8,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import org.json.JSONObject
@@ -102,6 +103,22 @@ class PlotWebRuntime(private val activity: Activity) {
             overScrollMode = WebView.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
+            isLongClickable = false
+            isHapticFeedbackEnabled = false
+            setOnLongClickListener { true }
+            setOnTouchListener { view, event ->
+                // A gesture that starts on a plot belongs to the plot, including vertical panning.
+                // The surrounding ScrollView can still be moved by starting the gesture outside it.
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN,
+                    MotionEvent.ACTION_MOVE,
+                    MotionEvent.ACTION_POINTER_DOWN,
+                    MotionEvent.ACTION_POINTER_UP -> view.parent?.requestDisallowInterceptTouchEvent(true)
+                    MotionEvent.ACTION_UP,
+                    MotionEvent.ACTION_CANCEL -> view.parent?.requestDisallowInterceptTouchEvent(false)
+                }
+                false
+            }
             settings.apply {
                 javaScriptEnabled = true
                 allowFileAccess = true // required only for file:///android_asset/plot_runtime
@@ -120,6 +137,9 @@ class PlotWebRuntime(private val activity: Activity) {
                 setSupportZoom(false)
                 builtInZoomControls = false
                 displayZoomControls = false
+                textZoom = 100
+                useWideViewPort = true
+                loadWithOverviewMode = false
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) offscreenPreRaster = true
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
