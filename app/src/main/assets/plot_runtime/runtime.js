@@ -101,70 +101,73 @@
       };
     },
     /**
-     * Zooms the SVG by changing its viewBox rather than applying a CSS transform
-     * to only one mark layer. This enlarges the complete rendered graph—axes,
-     * labels, symbols, strokes and marks—while keeping the Android/WebView size
-     * stable. Pointer coordinates continue to map through getScreenCTM().
+     * Installs semantic zoom. The zoom transform changes the data scales and
+     * invokes `redraw`; it never magnifies the SVG itself. Consequently mark
+     * widths, node radii, stroke widths, grid strokes, labels, and hit targets
+     * stay constant in screen pixels while their data positions are rescaled.
+     *
+     * Preferred usage:
+     * helpers.attachZoom(target, {
+     *   width, height, maxScale: 40,
+     *   redraw: transform => { ...transform.rescaleX(x)... }
+     * });
      */
-    attachZoom(node, maxScale = 40, onZoomStart = null) {
-      const svg = node?.matches?.('svg') ? node : node?.querySelector?.('svg');
-      if (!svg) return node;
-      const host = svg.parentElement || root;
-      const selection = d3.select(svg);
-      const rawViewBox = (svg.getAttribute('viewBox') || '').trim().split(/[ ,]+/).map(Number);
-      const baseWidth = Number.isFinite(rawViewBox[2]) && rawViewBox[2] > 0
-        ? rawViewBox[2]
-        : (svg.width?.baseVal?.value || svg.clientWidth || host.clientWidth || 360);
-      const baseHeight = Number.isFinite(rawViewBox[3]) && rawViewBox[3] > 0
-        ? rawViewBox[3]
-        : (svg.height?.baseVal?.value || svg.clientHeight || host.clientHeight || 240);
-      const baseX = Number.isFinite(rawViewBox[0]) ? rawViewBox[0] : 0;
-      const baseY = Number.isFinite(rawViewBox[1]) ? rawViewBox[1] : 0;
-      const baseViewBox = `${baseX} ${baseY} ${baseWidth} ${baseHeight}`;
+    attachZoom(node, options = {}, legacyOnZoomStart = null) {
+      if (!node) return null;
+      const config = typeof options === 'number'
+        ? {maxScale:options, onZoomStart:legacyOnZoomStart}
+        : (options || {});
+      const width = Math.max(1, Number(config.width) || node.clientWidth || 360);
+      const height = Math.max(1, Number(config.height) || node.clientHeight || 240);
+      const maxScale = Math.max(1, Number(config.maxScale) || 40);
+      const redraw = typeof config.redraw === 'function' ? config.redraw : null;
+      const selection = d3.select(node);
 
-      selection
-        .attr('viewBox', baseViewBox)
-        .attr('preserveAspectRatio', 'none')
-        .style('width', '100%')
-        .style('height', '100%')
-        .style('max-width', 'none')
-        .style('touch-action', 'none');
-      host.style.touchAction = 'none';
-      host.style.overflow = 'hidden';
+      selection.style('touch-action', 'none');
+      if (node.style) node.style.touchAction = 'none';
 
-      const hostSize = () => ({
-        width: Math.max(1, host.clientWidth || svg.clientWidth || baseWidth),
-        height: Math.max(1, host.clientHeight || svg.clientHeight || baseHeight)
-      });
-
-      const applyTransform = transform => {
-        const size = hostSize();
-        const unitX = baseWidth / size.width;
-        const unitY = baseHeight / size.height;
-        const viewX = baseX - (transform.x * unitX) / transform.k;
-        const viewY = baseY - (transform.y * unitY) / transform.k;
-        const viewWidth = baseWidth / transform.k;
-        const viewHeight = baseHeight / transform.k;
-        selection.attr('viewBox', `${viewX} ${viewY} ${viewWidth} ${viewHeight}`);
-        svg.dataset.exviaZoomScale = String(transform.k);
+      let frame = 0;
+      let pendingTransform = d3.zoomIdentity;
+      const commit = () => {
+        frame = 0;
+        redraw?.(pendingTransform);
+      };
+      const schedule = transform => {
+        pendingTransform = transform;
+        if (!frame) frame = requestAnimationFrame(commit);
       };
 
-      const initialHostSize = hostSize();
       const zoom = d3.zoom()
         .scaleExtent([1, maxScale])
-        .extent([[0, 0], [initialHostSize.width, initialHostSize.height]])
-        .translateExtent([[0, 0], [initialHostSize.width, initialHostSize.height]])
-        .on('start.exvia', () => onZoomStart?.())
-        .on('zoom.exvia', event => applyTransform(event.transform));
+        .extent([[0, 0], [width, height]])
+        .translateExtent([[0, 0], [width, height]])
+        .filter(event => {
+          if (event.type === 'wheel') return true;
+          if (event.type.startsWith('touch')) return true;
+          return !event.button;
+        })
+        .on('start.exvia', event => config.onZoomStart?.(event.transform))
+        .on('zoom.exvia', event => schedule(event.transform))
+        .on('end.exvia', event => {
+          schedule(event.transform);
+          config.onZoomEnd?.(event.transform);
+        });
 
-      const hostSelection = d3.select(host);
-      hostSelection.on('.zoom', null).call(zoom).on('dblclick.zoom', null);
-      hostSelection.on('dblclick.exvia-reset', event => {
+      selection.on('.zoom', null).call(zoom).on('dblclick.zoom', null);
+      selection.on('dblclick.exvia-reset', event => {
         event.preventDefault();
-        hostSelection.transition().duration(120).call(zoom.transform, d3.zoomIdentity);
+        selection.transition().duration(120).call(zoom.transform, d3.zoomIdentity);
       });
-      applyTransform(d3.zoomIdentity);
-      return host;
+      schedule(d3.zoomIdentity);
+
+      return {
+        reset() { selection.call(zoom.transform, d3.zoomIdentity); },
+        destroy() {
+          if (frame) cancelAnimationFrame(frame);
+          selection.on('.zoom', null).on('dblclick.exvia-reset', null);
+        },
+        transform(value) { selection.call(zoom.transform, value || d3.zoomIdentity); }
+      };
     }
   });
 
@@ -298,17 +301,17 @@
     const singleHalfSpan = timeAxis ? 30 * 60 * 1000 : 1;
     const domainMin = xMin0 === xMax0 ? xMin0 - singleHalfSpan : xMin0;
     const domainMax = xMin0 === xMax0 ? xMax0 + singleHalfSpan : xMax0;
-    const edgePx = Math.min(9, Math.max(5, innerW * .018));
+    const edgePx = Math.min(7, Math.max(4, innerW * .012));
     const ys = points.flatMap(d => [d.q1, d.q3, d.lowerStd, d.upperStd, d.value, ...d.outliers]);
     const yMin0 = d3.min(ys);
     const yMax0 = d3.max(ys);
     const ySpan = Math.max(1e-9, yMax0 - yMin0);
     const yPad = Math.max(Math.abs(yMin0 || 0) * .012, Math.abs(yMax0 || 0) * .012, ySpan * .055, .25);
-    const x = (timeAxis ? d3.scaleTime() : d3.scaleLinear())
+    const xBase = (timeAxis ? d3.scaleTime() : d3.scaleLinear())
       .domain(timeAxis ? [new Date(domainMin), new Date(domainMax)] : [domainMin, domainMax])
       .range([edgePx, innerW - edgePx]);
     const xv = value => timeAxis ? new Date(value) : value;
-    const y = d3.scaleLinear().domain([yMin0 - yPad, yMax0 + yPad]).nice().range([innerH, 0]);
+    const yBase = d3.scaleLinear().domain([yMin0 - yPad, yMax0 + yPad]).nice().range([innerH, 0]);
 
     const svg = d3.create('svg')
       .attr('width', width)
@@ -328,86 +331,123 @@
 
     const plotFrame = svg.append('g')
       .attr('transform', `translate(${margin.left},${margin.top})`)
-      .attr('clip-path', `url(#${clipId})`);
+      .attr('clip-path', `url(#${clipId})`)
+      .style('touch-action', 'none');
     const interactionRect = plotFrame.append('rect')
       .attr('width', innerW).attr('height', innerH)
       .attr('fill', 'transparent').style('pointer-events', 'all');
-    const plot = plotFrame.append('g').attr('class', 'zoom-content');
+    const plot = plotFrame.append('g').attr('class', 'semantic-zoom-content');
 
     const grid = svg.append('g')
       .attr('transform', `translate(${margin.left},${margin.top})`)
       .attr('color', theme.grid);
-    grid.call(d3.axisLeft(y).ticks(5).tickSize(-innerW).tickFormat(''))
-      .call(group => group.select('.domain').remove())
-      .call(group => group.selectAll('line').attr('stroke', theme.grid).attr('stroke-width', .7));
-
     const xAxis = svg.append('g')
       .attr('transform', `translate(${margin.left},${height - margin.bottom})`)
       .attr('color', theme.axis)
       .attr('data-text-color', theme.text);
-    const initialXAxis = timeAxis
-      ? d3.axisBottom(x).ticks(Math.min(5, points.length)).tickFormat(d3.timeFormat('%-d/%-m/%y\n%H:%M'))
-      : d3.axisBottom(x).ticks(5);
-    wrappedTimeAxis(xAxis, initialXAxis);
-
     const yAxis = svg.append('g')
       .attr('transform', `translate(${margin.left},${margin.top})`)
-      .attr('color', theme.axis)
-      .call(d3.axisLeft(y).ticks(5));
-    yAxis.selectAll('text').attr('fill', theme.text)
-      .style('font-family', 'ExviaJetBrains, monospace')
-      .style('font-size', '9px');
+      .attr('color', theme.axis);
 
-    plot.append('path').datum(points)
+    const observationPath = plot.append('path').datum(points)
       .attr('fill', 'none').attr('stroke', theme.observation)
       .attr('stroke-opacity', .40).attr('stroke-width', 1.05)
-      .attr('d', d3.line().x(d => x(xv(d.x))).y(d => y(d.value)));
+      .attr('vector-effect', 'non-scaling-stroke');
 
     const minGap = points.length > 1
-      ? d3.min(d3.pairs(points, (a, b) => Math.abs(x(xv(b.x)) - x(xv(a.x)))))
+      ? d3.min(d3.pairs(points, (a, b) => Math.abs(xBase(xv(b.x)) - xBase(xv(a.x)))))
       : 18;
-    const boxW = Math.max(3, Math.min(10, (minGap || 18) * .28));
-    const hitW = Math.max(18, Math.min(34, (minGap || 24) * .78));
-    const groups = plot.selectAll('g.snapshot').data(points).join('g')
-      .attr('class', 'snapshot').attr('transform', d => `translate(${x(xv(d.x))},0)`);
+    // Screen-pixel dimensions are deliberately constant at every zoom level.
+    const boxW = Math.max(3, Math.min(8, (minGap || 18) * .24));
+    const hitW = Math.max(18, Math.min(30, (minGap || 24) * .72));
+    const groups = plot.selectAll('g.snapshot').data(points).join('g').attr('class', 'snapshot');
 
     groups.each(function(d) {
       const group = d3.select(this);
       const color = d.direction > 0 ? theme.positive : d.direction < 0 ? theme.negative : theme.axis;
       const center = theme.center;
-      group.append('line').attr('x1', 0).attr('x2', 0)
-        .attr('y1', y(d.upperStd)).attr('y2', y(d.lowerStd))
-        .attr('stroke', color).attr('stroke-width', .85);
-      group.append('line').attr('x1', -boxW * .26).attr('x2', boxW * .26)
-        .attr('y1', y(d.upperStd)).attr('y2', y(d.upperStd))
-        .attr('stroke', color).attr('stroke-width', .85);
-      group.append('line').attr('x1', -boxW * .26).attr('x2', boxW * .26)
-        .attr('y1', y(d.lowerStd)).attr('y2', y(d.lowerStd))
-        .attr('stroke', color).attr('stroke-width', .85);
-      group.append('rect').attr('x', -boxW / 2).attr('width', boxW)
-        .attr('y', y(d.q3)).attr('height', Math.max(.7, y(d.q1) - y(d.q3)))
-        .attr('fill', color).attr('stroke', color).attr('stroke-width', .45);
-      group.append('line').attr('x1', -boxW / 2).attr('x2', boxW / 2)
-        .attr('y1', y(d.median)).attr('y2', y(d.median))
-        .attr('stroke', center).attr('stroke-width', 1.25);
-      group.append('line').attr('x1', -boxW / 2).attr('x2', boxW / 2)
-        .attr('y1', y(d.mean)).attr('y2', y(d.mean))
-        .attr('stroke', center).attr('stroke-width', .9).attr('stroke-dasharray', '1.7,1.5');
+      group.append('line').attr('class', 'whisker-main')
+        .attr('stroke', color).attr('stroke-width', .75).attr('vector-effect', 'non-scaling-stroke');
+      group.append('line').attr('class', 'whisker-upper')
+        .attr('stroke', color).attr('stroke-width', .75).attr('vector-effect', 'non-scaling-stroke');
+      group.append('line').attr('class', 'whisker-lower')
+        .attr('stroke', color).attr('stroke-width', .75).attr('vector-effect', 'non-scaling-stroke');
+      group.append('rect').attr('class', 'box')
+        .attr('x', -boxW / 2).attr('width', boxW)
+        .attr('fill', color).attr('stroke', color).attr('stroke-width', .4)
+        .attr('vector-effect', 'non-scaling-stroke');
+      group.append('line').attr('class', 'median')
+        .attr('x1', -boxW / 2).attr('x2', boxW / 2)
+        .attr('stroke', center).attr('stroke-width', 1.1).attr('vector-effect', 'non-scaling-stroke');
+      group.append('line').attr('class', 'mean')
+        .attr('x1', -boxW / 2).attr('x2', boxW / 2)
+        .attr('stroke', center).attr('stroke-width', .8).attr('stroke-dasharray', '1.5,1.35')
+        .attr('vector-effect', 'non-scaling-stroke');
       group.selectAll('circle.outlier').data(d.outliers).join('circle')
-        .attr('class', 'outlier').attr('cx', 0).attr('cy', value => y(value))
-        .attr('r', 1.1).attr('fill', 'none')
-        .attr('stroke', theme.outlier).attr('stroke-width', .75);
-      const observationY = y(d.value);
-      group.append('path')
-        .attr('class', 'observation-node')
-        .attr('d', `M -3.5 ${observationY} L 0 ${observationY - 2.25} L 3.5 ${observationY} L 0 ${observationY + 2.25} Z`)
-        .attr('fill', theme.observation).attr('stroke', center).attr('stroke-width', .45);
-      group.append('rect')
-        .attr('class', 'hit-zone')
+        .attr('class', 'outlier').attr('cx', 0).attr('r', 1.0).attr('fill', 'none')
+        .attr('stroke', theme.outlier).attr('stroke-width', .65).attr('vector-effect', 'non-scaling-stroke');
+      group.append('path').attr('class', 'observation-node')
+        .attr('fill', theme.observation).attr('stroke', center).attr('stroke-width', .4)
+        .attr('vector-effect', 'non-scaling-stroke');
+      group.append('rect').attr('class', 'hit-zone')
         .attr('x', -hitW / 2).attr('width', hitW)
         .attr('y', 0).attr('height', innerH)
         .attr('fill', 'transparent').style('pointer-events', 'all');
     });
+
+    let currentX = xBase;
+    let currentY = yBase;
+    const redraw = transform => {
+      currentX = transform.rescaleX(xBase);
+      currentY = transform.rescaleY(yBase);
+
+      grid.call(d3.axisLeft(currentY).ticks(5).tickSize(-innerW).tickFormat(''))
+        .call(group => group.select('.domain').remove())
+        .call(group => group.selectAll('line')
+          .attr('stroke', theme.grid).attr('stroke-width', .7).attr('vector-effect', 'non-scaling-stroke'));
+
+      const updatedXAxis = timeAxis
+        ? d3.axisBottom(currentX).ticks(Math.min(5, points.length)).tickFormat(d3.timeFormat('%-d/%-m/%y\n%H:%M'))
+        : d3.axisBottom(currentX).ticks(5);
+      wrappedTimeAxis(xAxis, updatedXAxis);
+      xAxis.selectAll('text').attr('fill', theme.text)
+        .style('font-family', 'ExviaJetBrains, monospace').style('font-size', '9px');
+      xAxis.selectAll('path,line').attr('vector-effect', 'non-scaling-stroke');
+
+      yAxis.call(d3.axisLeft(currentY).ticks(5));
+      yAxis.selectAll('text').attr('fill', theme.text)
+        .style('font-family', 'ExviaJetBrains, monospace').style('font-size', '9px');
+      yAxis.selectAll('path,line').attr('vector-effect', 'non-scaling-stroke');
+
+      observationPath.attr('d', d3.line()
+        .x(d => currentX(xv(d.x)))
+        .y(d => currentY(d.value)));
+
+      groups.attr('transform', d => `translate(${currentX(xv(d.x))},0)`);
+      groups.each(function(d) {
+        const group = d3.select(this);
+        group.select('.whisker-main')
+          .attr('x1', 0).attr('x2', 0)
+          .attr('y1', currentY(d.upperStd)).attr('y2', currentY(d.lowerStd));
+        group.select('.whisker-upper')
+          .attr('x1', -boxW * .25).attr('x2', boxW * .25)
+          .attr('y1', currentY(d.upperStd)).attr('y2', currentY(d.upperStd));
+        group.select('.whisker-lower')
+          .attr('x1', -boxW * .25).attr('x2', boxW * .25)
+          .attr('y1', currentY(d.lowerStd)).attr('y2', currentY(d.lowerStd));
+        group.select('.box')
+          .attr('y', currentY(d.q3))
+          .attr('height', Math.max(.7, currentY(d.q1) - currentY(d.q3)));
+        group.select('.median')
+          .attr('y1', currentY(d.median)).attr('y2', currentY(d.median));
+        group.select('.mean')
+          .attr('y1', currentY(d.mean)).attr('y2', currentY(d.mean));
+        group.selectAll('circle.outlier').attr('cy', value => currentY(value));
+        const observationY = currentY(d.value);
+        group.select('.observation-node')
+          .attr('d', `M -3.15 ${observationY} L 0 ${observationY - 2.0} L 3.15 ${observationY} L 0 ${observationY + 2.0} Z`);
+      });
+    };
 
     const tip = tooltip(theme);
     let selectedNode = null;
@@ -416,18 +456,18 @@
       tip.style.display = 'none';
       if (selectedNode) {
         d3.select(selectedNode).select('.observation-node')
-          .attr('stroke', theme.center).attr('stroke-width', .45);
+          .attr('stroke', theme.center).attr('stroke-width', .4);
       }
       selectedNode = null;
     };
     const selectPoint = (event, d, node) => {
       if (selectedNode && selectedNode !== node) {
         d3.select(selectedNode).select('.observation-node')
-          .attr('stroke', theme.center).attr('stroke-width', .45);
+          .attr('stroke', theme.center).attr('stroke-width', .4);
       }
       selectedNode = node;
       d3.select(node).select('.observation-node')
-        .attr('stroke', theme.selection).attr('stroke-width', 1.25);
+        .attr('stroke', theme.selection).attr('stroke-width', 1.15);
       tip.textContent = `${d.label || new Date(d.x).toLocaleString()}\nTotal: ${helpers.format(d.value)} (${d.rowCount} row${d.rowCount === 1 ? '' : 's'})\nn: ${d.n}\nQ1: ${helpers.format(d.q1)}\nMedian: ${helpers.format(d.median)}\nMean: ${helpers.format(d.mean)}\nQ3: ${helpers.format(d.q3)}\nσ: ${helpers.format(d.stdv)}\nOutliers: ${d.outliers.length}`;
       placeTooltip(tip, event);
     };
@@ -454,11 +494,14 @@
       if (event.target === interactionRect.node()) hideTip();
     });
 
-    enableD3Zoom(svg.node(), hideTip);
-  }
-
-  function enableD3Zoom(svgNode, onZoomStart) {
-    helpers.attachZoom(svgNode, 40, onZoomStart);
+    redraw(d3.zoomIdentity);
+    helpers.attachZoom(plotFrame.node(), {
+      width:innerW,
+      height:innerH,
+      maxScale:40,
+      onZoomStart:hideTip,
+      redraw
+    });
   }
 
   function plotBase(theme, width, height) {
@@ -470,49 +513,84 @@
     };
   }
 
-  function installObservableInspector(chart, data, options, theme) {
-    const svg = chart.matches?.('svg') ? chart : chart.querySelector?.('svg');
-    if (!svg || !data.length) return;
+  function mountSemanticObservable({theme, width, height, baseX, baseY, data, xValue, label, build}) {
+    const host = document.createElement('div');
+    host.className = 'exvia-semantic-plot';
+    Object.assign(host.style, {
+      position:'relative', width:'100%', height:'100%', overflow:'hidden',
+      background:theme.background, touchAction:'none'
+    });
+    const layer = document.createElement('div');
+    Object.assign(layer.style, {position:'absolute', inset:'0', overflow:'hidden'});
+    const overlay = document.createElement('div');
+    Object.assign(overlay.style, {
+      position:'absolute', inset:'0', zIndex:'6', background:'transparent',
+      touchAction:'none', WebkitUserSelect:'none', userSelect:'none'
+    });
+    host.append(layer, overlay);
+    root.appendChild(host);
+
     const tip = tooltip(theme);
-    const width = options.width;
-    const height = options.height;
-    const marginLeft = options.marginLeft;
-    const marginRight = options.marginRight;
-    const marginTop = options.marginTop;
-    const marginBottom = options.marginBottom;
-    const xValues = data.map(options.xValue);
-    const xDomain = d3.extent(xValues);
-    const sameX = +xDomain[0] === +xDomain[1];
-    const xScale = options.time
-      ? d3.scaleUtc().domain(sameX ? [new Date(+xDomain[0] - 1800000), new Date(+xDomain[1] + 1800000)] : xDomain).range([marginLeft, width - marginRight])
-      : d3.scaleLinear().domain(sameX ? [+xDomain[0] - 1, +xDomain[1] + 1] : xDomain).range([marginLeft, width - marginRight]);
-    const overlay = d3.select(svg).append('rect')
-      .attr('x', marginLeft).attr('y', marginTop)
-      .attr('width', Math.max(1, width - marginLeft - marginRight))
-      .attr('height', Math.max(1, height - marginTop - marginBottom))
-      .attr('fill', 'transparent').style('pointer-events', 'all');
-    let start = null;
-    overlay
-      .on('pointerdown.inspect', event => { start = {x:event.clientX, y:event.clientY, time:performance.now()}; })
-      .on('pointerup.inspect', event => {
-        if (!start) return;
-        const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
-        const elapsed = performance.now() - start.time;
-        start = null;
-        if (moved > 10 || elapsed > 900) return;
-        const point = svg.createSVGPoint();
-        point.x = event.clientX;
-        point.y = event.clientY;
-        const matrix = svg.getScreenCTM();
-        if (!matrix) return;
-        const local = point.matrixTransform(matrix.inverse());
-        const target = xScale.invert(local.x);
-        const nearest = d3.least(data, d => Math.abs(+options.xValue(d) - +target));
-        if (!nearest) return;
-        tip.textContent = options.label(nearest);
-        placeTooltip(tip, event);
-      })
-      .on('pointercancel.inspect', () => { start = null; });
+    let currentX = baseX.copy();
+    let currentY = baseY.copy();
+    let selectedKey = null;
+    let pressStart = null;
+
+    const hideTip = () => {
+      tip.style.display = 'none';
+      selectedKey = null;
+    };
+
+    const redraw = transform => {
+      currentX = transform.rescaleX(baseX);
+      currentY = transform.rescaleY(baseY);
+      const chart = build(currentX.domain(), currentY.domain());
+      chart.style.width = '100%';
+      chart.style.height = '100%';
+      chart.style.maxWidth = 'none';
+      chart.style.margin = '0';
+      layer.replaceChildren(chart);
+      // Plot's generated strokes and symbols remain defined in CSS pixels because
+      // the chart is re-rendered against new domains instead of SVG-scaled.
+      d3.select(chart).selectAll('path,line,circle,rect').attr('vector-effect', 'non-scaling-stroke');
+    };
+
+    overlay.addEventListener('pointerdown', event => {
+      pressStart = {x:event.clientX, y:event.clientY, time:performance.now()};
+    });
+    overlay.addEventListener('pointercancel', () => { pressStart = null; });
+    overlay.addEventListener('pointerup', event => {
+      if (!pressStart) return;
+      const moved = Math.hypot(event.clientX - pressStart.x, event.clientY - pressStart.y);
+      const elapsed = performance.now() - pressStart.time;
+      pressStart = null;
+      if (moved > 10 || elapsed > 900) return;
+      const bounds = overlay.getBoundingClientRect();
+      const localX = event.clientX - bounds.left;
+      const target = currentX.invert(localX);
+      const nearest = d3.least(data, d => Math.abs(+xValue(d) - +target));
+      if (!nearest) {
+        hideTip();
+        return;
+      }
+      const key = String(+xValue(nearest));
+      if (selectedKey === key && tip.style.display !== 'none') {
+        hideTip();
+        return;
+      }
+      selectedKey = key;
+      tip.textContent = label(nearest);
+      placeTooltip(tip, event);
+    });
+
+    redraw(d3.zoomIdentity);
+    helpers.attachZoom(overlay, {
+      width,
+      height,
+      maxScale:40,
+      onZoomStart:hideTip,
+      redraw
+    });
   }
 
   function renderAccumulation(payload, theme) {
@@ -526,20 +604,36 @@
     const height = Math.max(210, root.clientHeight || payload.height || 230);
     const base = plotBase(theme, width, height);
     const xField = timeAxis ? 'date' : 'x';
-    const chart = Plot.plot({...base, x:{grid:true,type:timeAxis ? 'utc' : 'linear'}, marks:[
-      Plot.ruleY([0], {stroke:theme.grid}),
-      Plot.areaY(data, {x:xField,y:'cumulative',fill:theme.observation,fillOpacity:.12}),
-      Plot.lineY(data, {x:xField,y:'cumulative',stroke:theme.observation,strokeWidth:1.35}),
-      Plot.dot(data, {x:xField,y:'cumulative',fill:theme.observation,stroke:theme.center,strokeWidth:.35,r:2.15})
-    ]});
-    root.appendChild(chart);
-    installObservableInspector(chart, data, {
-      ...base,
-      time:timeAxis,
+    const xExtent = d3.extent(data, d => timeAxis ? d.date : d.x);
+    const sameX = +xExtent[0] === +xExtent[1];
+    const baseX = timeAxis
+      ? d3.scaleUtc().domain(sameX ? [new Date(+xExtent[0] - 1800000), new Date(+xExtent[1] + 1800000)] : xExtent)
+      : d3.scaleLinear().domain(sameX ? [+xExtent[0] - 1, +xExtent[1] + 1] : xExtent);
+    baseX.range([base.marginLeft, width - base.marginRight]);
+    const yExtent = d3.extent(data, d => d.cumulative);
+    const yMin = Math.min(0, yExtent[0]);
+    const yMax = Math.max(0, yExtent[1]);
+    const yPad = Math.max((yMax - yMin) * .06, Math.abs(yMax) * .01, 1e-6);
+    const baseY = d3.scaleLinear()
+      .domain([yMin - yPad, yMax + yPad]).nice()
+      .range([height - base.marginBottom, base.marginTop]);
+
+    mountSemanticObservable({
+      theme, width, height, baseX, baseY, data,
       xValue:d => timeAxis ? d.date : d.x,
-      label:d => `${d.label || (timeAxis ? d.date.toLocaleString() : helpers.format(d.x))}\nTimestamp total: ${helpers.format(d.value)}\nAccumulation: ${helpers.format(d.cumulative)}`
-    }, theme);
-    helpers.attachZoom(chart);
+      label:d => `${d.label || (timeAxis ? d.date.toLocaleString() : helpers.format(d.x))}\nTimestamp total: ${helpers.format(d.value)}\nAccumulation: ${helpers.format(d.cumulative)}`,
+      build:(xDomain, yDomain) => Plot.plot({
+        ...base,
+        x:{grid:true,type:timeAxis ? 'utc' : 'linear',domain:xDomain},
+        y:{grid:true,domain:yDomain},
+        marks:[
+          Plot.ruleY([0], {stroke:theme.grid}),
+          Plot.areaY(data, {x:xField,y:'cumulative',fill:theme.observation,fillOpacity:.12}),
+          Plot.lineY(data, {x:xField,y:'cumulative',stroke:theme.observation,strokeWidth:1.35}),
+          Plot.dot(data, {x:xField,y:'cumulative',fill:theme.observation,stroke:theme.center,strokeWidth:.35,r:2.15})
+        ]
+      })
+    });
   }
 
   function renderNormal(payload, theme) {
@@ -561,22 +655,28 @@
     const width = Math.max(280, root.clientWidth || 360);
     const height = Math.max(210, root.clientHeight || payload.height || 230);
     const base = plotBase(theme, width, height);
-    const chart = Plot.plot({...base, marks:[
-      Plot.areaY(curve, {x:'x',y:'density',fill:theme.accent,fillOpacity:.14}),
-      Plot.lineY(curve, {x:'x',y:'density',stroke:theme.accent,strokeWidth:1.4}),
-      Plot.tickX(values, {x:d => d,y:0,stroke:theme.observation,strokeOpacity:.55,strokeWidth:.7}),
-      Plot.ruleX([mean], {stroke:theme.center,strokeDasharray:'3,3',strokeWidth:.9})
-    ]});
-    root.appendChild(chart);
-    installObservableInspector(chart, curve, {
-      ...base,
-      time:false,
-      xValue:d => d.x,
-      label:d => `x: ${helpers.format(d.x)}\nDensity: ${helpers.format(d.density)}\nMean: ${helpers.format(mean)}\nσ: ${helpers.format(deviation)}`
-    }, theme);
-    helpers.attachZoom(chart);
-  }
+    const baseX = d3.scaleLinear().domain([lo, hi]).range([base.marginLeft, width - base.marginRight]);
+    const maxDensity = d3.max(curve, d => d.density) || 1;
+    const baseY = d3.scaleLinear().domain([0, maxDensity * 1.08]).nice()
+      .range([height - base.marginBottom, base.marginTop]);
 
+    mountSemanticObservable({
+      theme, width, height, baseX, baseY, data:curve,
+      xValue:d => d.x,
+      label:d => `x: ${helpers.format(d.x)}\nDensity: ${helpers.format(d.density)}\nMean: ${helpers.format(mean)}\nσ: ${helpers.format(deviation)}`,
+      build:(xDomain, yDomain) => Plot.plot({
+        ...base,
+        x:{grid:true,domain:xDomain},
+        y:{grid:true,domain:yDomain},
+        marks:[
+          Plot.areaY(curve, {x:'x',y:'density',fill:theme.accent,fillOpacity:.14}),
+          Plot.lineY(curve, {x:'x',y:'density',stroke:theme.accent,strokeWidth:1.4}),
+          Plot.tickX(values, {x:d => d,y:0,stroke:theme.observation,strokeOpacity:.55,strokeWidth:.7}),
+          Plot.ruleX([mean], {stroke:theme.center,strokeDasharray:'3,3',strokeWidth:.9})
+        ]
+      })
+    });
+  }
   function renderCustom(payload, theme) {
     clear(theme);
     const jsonFile = Object.freeze(payload.jsonFile || {name:'current.json',content:'[]'});
