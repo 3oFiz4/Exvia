@@ -58,7 +58,7 @@ class SettingsStore(context: Context) {
             financeColumns = parseColumnList(prefs.getString(KEY_FINANCE_COLUMNS, "price") ?: "price"),
             customMetrics = parseCustomMetrics(prefs.getString(KEY_CUSTOM_METRICS, "[]") ?: "[]"),
             customPlots = parseCustomPlots(prefs.getString(KEY_CUSTOM_PLOTS, "[]") ?: "[]"),
-            reportRepo = prefs.getString(KEY_REPORT_REPO, "finance_app") ?: "finance_app",
+            reportRepo = prefs.getString(KEY_REPORT_REPO, "Exvia") ?: "Exvia",
             uiScale = prefs.getString(KEY_UI_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.60) ?: 1.0,
             textScale = prefs.getString(KEY_TEXT_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.80) ?: 1.0,
             themePreset = preset,
@@ -83,7 +83,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_FINANCE_COLUMNS, settings.financeColumns.joinToString(", "))
             .putString(KEY_CUSTOM_METRICS, customMetricsToJson(settings.customMetrics))
             .putString(KEY_CUSTOM_PLOTS, customPlotsToJson(settings.customPlots))
-            .putString(KEY_REPORT_REPO, settings.reportRepo.trim().ifBlank { "finance_app" })
+            .putString(KEY_REPORT_REPO, settings.reportRepo.trim().ifBlank { "Exvia" })
             .putString(KEY_UI_SCALE, settings.uiScale.toString())
             .putString(KEY_TEXT_SCALE, settings.textScale.toString())
             .putString(KEY_THEME_PRESET, settings.themePreset.id)

@@ -519,7 +519,7 @@ class MainActivity : Activity() {
         senarySetting = senary.input
 
         themeSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, ThemePreset.entries.map { it.label })
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, ThemePreset.entries.map { it.displayName })
             backgroundTintList = inputTint()
         }
         var suppressThemeSelection = true
@@ -911,7 +911,7 @@ class MainActivity : Activity() {
             financeColumns = SettingsStore.parseColumnList(financeColumnsSetting.text.toString()),
             customMetrics = customMetricsDraft.toList(),
             customPlots = customPlotsDraft.toList(),
-            reportRepo = reportRepoSetting.text.toString().trim().ifBlank { "finance_app" },
+            reportRepo = reportRepoSetting.text.toString().trim().ifBlank { "Exvia" },
             uiScale = uiScale!!,
             textScale = textScale!!,
             themePreset = selectedTheme,
