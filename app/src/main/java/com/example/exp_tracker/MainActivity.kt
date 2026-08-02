@@ -10,6 +10,7 @@ import android.graphics.drawable.StateListDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -33,6 +34,7 @@ import android.widget.Spinner
 import android.widget.TableLayout
 import android.widget.TableRow
 import android.widget.TextView
+import android.widget.Toast
 import java.time.LocalDateTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -94,6 +96,8 @@ class MainActivity : Activity() {
     private lateinit var statTabButton: Button
     private lateinit var filesTabButton: Button
     private lateinit var resyncButton: TextView
+    private lateinit var titleText: TextView
+    private lateinit var filteringMethodButton: TextView
 
     private lateinit var ownerSetting: EditText
     private lateinit var repoSetting: EditText
@@ -116,6 +120,9 @@ class MainActivity : Activity() {
     private lateinit var senarySetting: EditText
     private lateinit var plotColumnsSetting: EditText
     private lateinit var financeColumnsSetting: EditText
+    private lateinit var reportRepoSetting: EditText
+    private lateinit var uiScaleSetting: EditText
+    private lateinit var textScaleSetting: EditText
     private lateinit var customMetricList: LinearLayout
     private lateinit var customPlotList: LinearLayout
     private var customMetricsDraft = mutableListOf<CustomMetricDefinition>()
@@ -130,12 +137,16 @@ class MainActivity : Activity() {
     private var busy = false
     private var filterEnabled = false
     private var filterQuery = ""
+    private var developerMode = true
+    private var titleTapCount = 0
+    private var lastTitleTapAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         tokenStore = TokenStore(this)
         settingsStore = SettingsStore(this)
         settings = settingsStore.load()
+        developerMode = settingsStore.developerModeEnabled()
         customMetricsDraft = settings.customMetrics.toMutableList()
         customPlotsDraft = settings.customPlots.toMutableList()
         filterSnippets = settingsStore.loadFilterSnippets().toMutableList()
@@ -182,6 +193,23 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun handleTitleTap() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastTitleTapAt > 1_100L) titleTapCount = 0
+        lastTitleTapAt = now
+        titleTapCount += 1
+        if (titleTapCount < 3) return
+        titleTapCount = 0
+        developerMode = !developerMode
+        settingsStore.setDeveloperModeEnabled(developerMode)
+        Toast.makeText(
+            this,
+            if (developerMode) "Developer Options enabled" else "Developer Options hidden",
+            Toast.LENGTH_SHORT,
+        ).show()
+        recreate()
+    }
+
     private fun buildUi(): SwipeSettingsLayout {
         drawerRoot = SwipeSettingsLayout(this).apply { setBackgroundColor(BLACK) }
         val content = LinearLayout(this).apply {
@@ -204,13 +232,15 @@ class MainActivity : Activity() {
                 contentDescription = "Exvia logo"
             }, LinearLayout.LayoutParams(dp(30), dp(30)).apply { marginEnd = dp(9) })
         }
-        titleRow.addView(TextView(this).apply {
+        titleText = TextView(this).apply {
             text = "Exvia"
             textSize = 22f
             setTextColor(WHITE)
             setPadding(0, dp(2), 0, dp(4))
-            AppFonts.apply(this, bold = true)
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            AppFonts.apply(this, bold = true, textScale = settings.textScale)
+            setOnClickListener { handleTitleTap() }
+        }
+        titleRow.addView(titleText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         resyncButton = TextView(this).apply {
             text = "Re-sync"
             setTextColor(PRIMARY)
@@ -263,7 +293,7 @@ class MainActivity : Activity() {
         drawerRoot.addView(settingsDrawer, FrameLayout.LayoutParams(drawerWidth, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START))
         drawerRoot.attachDrawer(settingsDrawer, scrim)
         updateTabButtons()
-        AppFonts.applyToTree(drawerRoot)
+        AppFonts.applyToTree(drawerRoot, settings.textScale)
         return drawerRoot
     }
 
@@ -319,6 +349,16 @@ class MainActivity : Activity() {
             })
             attachTimedHold(this, 1_000L) { showFilterSnippetManager() }
         }
+        filteringMethodButton = TextView(this@MainActivity).apply {
+            text = "Filtering method"
+            gravity = Gravity.CENTER_VERTICAL
+            setTextColor(PRIMARY)
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            minHeight = dp(30)
+            background = inactiveActionBackground(PRIMARY)
+            AppFonts.apply(this, bold = true)
+            setOnClickListener { showFilteringMethodManager() }
+        }
         filterToggle = TextView(this@MainActivity).apply {
             text = "Filter OFF"
             gravity = Gravity.CENTER
@@ -333,7 +373,8 @@ class MainActivity : Activity() {
                 applyFilterAndRender(showStatus = true)
             }
         }
-        filterRow.addView(filterInput, LinearLayout.LayoutParams(0, dp(30), 1f).apply { marginEnd = dp(5) })
+        val filterControl: View = if (developerMode) filterInput else filteringMethodButton
+        filterRow.addView(filterControl, LinearLayout.LayoutParams(0, dp(30), 1f).apply { marginEnd = dp(5) })
         filterRow.addView(filterToggle, LinearLayout.LayoutParams(dp(94), dp(30)))
         addView(filterRow, matchWidth())
 
@@ -411,75 +452,75 @@ class MainActivity : Activity() {
             textSize = 24f
             setTextColor(WHITE)
             setPadding(0, 0, 0, dp(6))
-            AppFonts.apply(this, bold = true)
+            AppFonts.apply(this, bold = true, textScale = settings.textScale)
         }, matchWidth())
         body.addView(TextView(this).apply {
-            text = "Swipe left to close. Hold configuration text for 2 seconds or tap ⓘ for an explanation."
+            text = if (developerMode) {
+                "Developer Options are ON. Triple-tap the Exvia title to hide advanced controls. Swipe left to close."
+            } else {
+                "Regular mode. Triple-tap the Exvia title to show Developer Options. Swipe left to close."
+            }
             setTextColor(MUTED)
             setPadding(0, 0, 0, dp(14))
-            AppFonts.apply(this)
+            AppFonts.apply(this, textScale = settings.textScale)
         }, matchWidth())
 
-        val owner = configField("GitHub owner / username", "github.owner", settings.owner, "GitHub account that owns the expense repository. Repository creation verifies this against the account represented by the PAT.")
+        // Initialize every field even when its advanced section is hidden, so Save remains deterministic.
+        val owner = configField("GitHub owner / username", "github.owner", settings.owner, "GitHub account that owns the expense repository and the report repository.")
         ownerSetting = owner.input
         val repo = configField("Repository", "github.repo", settings.repo, "Repository name containing the JSON expense folder.")
         repoSetting = repo.input
         val branch = configField("Branch", "github.branch", settings.branch, "Branch used for every read and write. Usually main.")
         branchSetting = branch.input
-        val folder = configField("JSON folder", "github.folder", settings.folder, "Folder directly containing the selectable JSON files, for example Financial.")
+        val folder = configField("JSON folder", "github.folder", settings.folder, "Folder directly containing selectable JSON files, for example Financial.")
         folderSetting = folder.input
-        val defaultFile = configField("Default JSON file", "github.default_file", settings.defaultJson, "Preferred JSON file selected when the application loads.")
+        val defaultFile = configField("Default JSON file", "github.default_file", settings.defaultJson, "Preferred JSON file selected when Exvia loads.")
         defaultFileSetting = defaultFile.input
-        val token = configField("GitHub PAT", "github.pat", "", "Personal access token used for GitHub API requests. It is encrypted with Android Keystore and never written into the repository.", password = true)
+        val reportRepo = configField("Report issue repository", "github.report_repo", settings.reportRepo, "Repository that receives bug, enhancement, and feature reports. The owner is github.owner.")
+        reportRepoSetting = reportRepo.input
+        val token = configField("GitHub PAT", "github.pat", "", "Personal access token used for repository files and issue creation. It is encrypted locally and never uploaded in the synchronized config file.", password = true)
         tokenSetting = token.input.apply {
             hint = if (tokenStore.load() == null) "github.pat" else "github.pat  ${"*".repeat(12)}"
         }
 
-        val array = configField("Object array key (fallback)", "schema.array_key", settings.arrayKey, "If the JSON root is an object rather than an array, this key selects the array containing table rows.")
+        val array = configField("Object array key (fallback)", "schema.array_key", settings.arrayKey, "If the JSON root is an object rather than an array, this key selects the row array.")
         arrayKeySetting = array.input
-        val date = configField("Date key override", "schema.date_key", settings.dateKeyOverride, "Optional explicit date/datetime column. If blank, common date-like keys are inferred.")
+        val date = configField("Date key override", "schema.date_key", settings.dateKeyOverride, "Optional explicit date/datetime column. Common date-like keys are inferred when blank.")
         dateKeySetting = date.input
-        val money = configField("Money key override", "schema.money_key", settings.moneyKeyOverride, "Optional explicit money column. If blank, keys such as price, amount, cost, expense, value, total, or money are inferred.")
+        val money = configField("Money key override", "schema.money_key", settings.moneyKeyOverride, "Optional explicit money column. Common amount-like keys are inferred when blank.")
         moneyKeySetting = money.input
-        val ticker = configField("Ticker/category key override", "schema.ticker_key", settings.tickerKeyOverride, "Optional category/ticker column used for category coloring and finance grouping.")
+        val ticker = configField("Ticker/category key override", "schema.ticker_key", settings.tickerKeyOverride, "Optional category/ticker column used for coloring and finance grouping.")
         tickerKeySetting = ticker.input
-        val tags = configField("Tags key override", "schema.tags_key", settings.tagsKeyOverride, "Optional tags column. Tags are edited as comma-separated values while repository storage keeps the configured list-like string format.")
+        val tags = configField("Tags key override", "schema.tags_key", settings.tagsKeyOverride, "Optional tags column. Tags are edited as comma-separated values.")
         tagsKeySetting = tags.input
-        val tickerColors = configField("Ticker color mapping", "display.ticker_colors", SettingsStore.colorsToText(settings.tickerColors), "One mapping per line, for example FD=#FFB300. Matching ticker/category cells use these colors.", multiline = true)
+        val tickerColors = configField("Ticker color mapping", "display.ticker_colors", SettingsStore.colorsToText(settings.tickerColors), "One mapping per line, for example FD=#FFB300.", multiline = true)
         tickerColorsSetting = tickerColors.input
-        val plotColumns = configField("Columns with plotting enabled", "stats.plot_columns", settings.plotColumns.joinToString(", "), "Comma-separated keys that may render History, Accumulation, and Distribution plots. Default: price.")
+        val plotColumns = configField("Columns with plotting enabled", "stats.plot_columns", settings.plotColumns.joinToString(", "), "Comma-separated numeric JSON keys that receive built-in plots. Default: price.")
         plotColumnsSetting = plotColumns.input
-        val financeColumns = configField("Columns reported as personal finance", "finance.columns", settings.financeColumns.joinToString(", "), "Comma-separated numeric keys treated as money columns for Personal finance reports. Default: price.")
+        val financeColumns = configField("Columns reported as personal finance", "finance.columns", settings.financeColumns.joinToString(", "), "Comma-separated numeric JSON keys used for personal-finance reports. Default: price.")
         financeColumnsSetting = financeColumns.input
 
-        val primary = colorConfigField("Primary", "theme.primary", settings.palette.primary, "Highest-focus active color. Used for active borders and important focus states.")
+        val uiScale = configField("UI size multiplier", "display.ui_scale", settings.uiScale.toString(), "Scales margins, padding, control height, and other density-based UI dimensions. Recommended range: 0.70–1.60.")
+        uiScaleSetting = uiScale.input.apply { inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL }
+        val textScale = configField("Text size multiplier", "display.text_scale", settings.textScale.toString(), "Scales text independently from the rest of the UI. Recommended range: 0.70–1.80.")
+        textScaleSetting = textScale.input.apply { inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL }
+
+        val primary = colorConfigField("Primary", "theme.primary", settings.palette.primary, "Active/focused state and highest-priority outline.")
         primarySetting = primary.input
-        val secondary = colorConfigField("Secondary", "theme.secondary", settings.palette.secondary, "Lower-focus accent used for secondary emphasis.")
+        val secondary = colorConfigField("Secondary", "theme.secondary", settings.palette.secondary, "Inactive or lower-priority accent.")
         secondarySetting = secondary.input
-        val tertiary = colorConfigField("Tertiary / background", "theme.tertiary", settings.palette.tertiary, "Main application and dialog background.")
+        val tertiary = colorConfigField("Tertiary", "theme.tertiary", settings.palette.tertiary, "Main application background.")
         tertiarySetting = tertiary.input
-        val quaternary = colorConfigField("Quaternary / surface", "theme.quaternary", settings.palette.quaternary, "Low-focus surfaces, chart grid, and dark placeholder regions.")
+        val quaternary = colorConfigField("Quaternary", "theme.quaternary", settings.palette.quaternary, "Secondary surfaces and plot grids.")
         quaternarySetting = quaternary.input
-        val quinary = colorConfigField("Quinary / muted", "theme.quinary", settings.palette.quinary, "Muted explanatory text, axes, and secondary labels.")
+        val quinary = colorConfigField("Quinary", "theme.quinary", settings.palette.quinary, "Muted labels and placeholders.")
         quinarySetting = quinary.input
-        val senary = colorConfigField("Senary / text", "theme.senary", settings.palette.senary, "Primary readable text color.")
+        val senary = colorConfigField("Senary", "theme.senary", settings.palette.senary, "Primary readable text.")
         senarySetting = senary.input
 
-        val themeNames = ThemePreset.entries.map { it.displayName }
-        val themeAdapter = object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, themeNames) {
-            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
-                (super.getView(position, convertView, parent) as TextView).apply {
-                    setTextColor(WHITE); setBackgroundColor(BLACK); setPadding(dp(10), dp(10), dp(10), dp(10)); AppFonts.apply(this)
-                }
-            override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View =
-                (super.getDropDownView(position, convertView, parent) as TextView).apply {
-                    setTextColor(WHITE); setBackgroundColor(SURFACE); setPadding(dp(12), dp(10), dp(12), dp(10)); AppFonts.apply(this)
-                }
-        }.apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         themeSpinner = Spinner(this).apply {
-            adapter = themeAdapter
-            background = noBorderBackground()
-            setPadding(dp(6), dp(2), dp(6), dp(2))
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, ThemePreset.entries.map { it.label })
+            backgroundTintList = inputTint()
         }
         var suppressThemeSelection = true
         themeSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
@@ -491,52 +532,67 @@ class MainActivity : Activity() {
         themeSpinner.setSelection(ThemePreset.entries.indexOf(settings.themePreset).coerceAtLeast(0), false)
         themeSpinner.post { suppressThemeSelection = false }
 
-        body.addView(accordion("GitHub", initiallyOpen = true, tooltip = "Repository connection, branch, data folder, default file, and encrypted GitHub PAT.") { container ->
-            listOf(owner.wrapper, repo.wrapper, branch.wrapper, folder.wrapper, defaultFile.wrapper, token.wrapper).forEach { container.addView(it, spacedMatchWidth(5)) }
-            container.addView(styledButton("Clear stored PAT", accent = SECONDARY).apply {
-                setOnClickListener {
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("Clear GitHub PAT?")
-                        .setNegativeButton("Cancel", null)
-                        .setPositiveButton("Clear") { _, _ ->
-                            tokenStore.clear(); tokenSetting.text.clear(); tokenSetting.hint = "github.pat"; statusText.text = "Stored PAT cleared."
-                        }.create().also { showDialog(it) }
-                }
-            }, spacedMatchWidth(6))
-        }, spacedMatchWidth(10))
+        if (developerMode) {
+            body.addView(accordion("GitHub", initiallyOpen = true, tooltip = "Repository connection, report target, data folder, default file, and encrypted GitHub PAT.") { container ->
+                listOf(owner.wrapper, repo.wrapper, branch.wrapper, folder.wrapper, defaultFile.wrapper, reportRepo.wrapper, token.wrapper)
+                    .forEach { container.addView(it, spacedMatchWidth(5)) }
+                container.addView(styledButton("Clear stored PAT", accent = SECONDARY).apply {
+                    setOnClickListener {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Clear GitHub PAT?")
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Clear") { _, _ ->
+                                tokenStore.clear(); tokenSetting.text.clear(); tokenSetting.hint = "github.pat"; statusText.text = "Stored PAT cleared."
+                            }.create().also { showDialog(it) }
+                    }
+                }, spacedMatchWidth(6))
+            }, spacedMatchWidth(10))
+        }
 
         body.addView(accordion("Color", tooltip = "Theme preset and six configurable semantic palette colors.") { container ->
             container.addView(infoText("Theme").apply {
-                AppFonts.apply(this, bold = true)
-                tooltipController.attachHold(this, { "Switch between Default, Ayu, Ayu-Light, and Default light presets. Individual colors remain editable after selecting a preset." })
+                AppFonts.apply(this, bold = true, textScale = settings.textScale)
+                tooltipController.attachHold(this, { "Switch among Default, Ayu, Ayu-Light, and Default light. Individual colors remain editable." })
             }, spacedMatchWidth(3))
             container.addView(themeSpinner, spacedMatchWidth(8))
-            listOf(primary.wrapper, secondary.wrapper, tertiary.wrapper, quaternary.wrapper, quinary.wrapper, senary.wrapper).forEach { container.addView(it, spacedMatchWidth(5)) }
-        }, spacedMatchWidth(10))
-
-        body.addView(accordion("Schema & Display", tooltip = "Schema overrides, category colors, plot-enabled columns, and finance-report columns.") { container ->
-            listOf(array.wrapper, date.wrapper, money.wrapper, ticker.wrapper, tags.wrapper, tickerColors.wrapper, plotColumns.wrapper, financeColumns.wrapper)
+            listOf(primary.wrapper, secondary.wrapper, tertiary.wrapper, quaternary.wrapper, quinary.wrapper, senary.wrapper)
                 .forEach { container.addView(it, spacedMatchWidth(5)) }
         }, spacedMatchWidth(10))
 
-        customMetricList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
-        renderCustomMetricSettings()
-        body.addView(accordion("Custom metric", tooltip = "Create JavaScript metrics evaluated locally against the current filtered JSON. Scripts run without a Java bridge, file access, or network loading.") { container ->
-            container.addView(infoText("The only injected host object is jsonFile. Use jsonFile.name for the selected filename and JSON.parse(jsonFile.content) to parse the current visible/filtered JSON rows yourself.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
-            container.addView(customMetricList, matchWidth())
-            container.addView(styledButton("+ Add custom metric").apply { setOnClickListener { editCustomMetric(null) } }, spacedMatchWidth(4))
-        }, spacedMatchWidth(12))
+        body.addView(accordion("Interface", tooltip = "Resize the full UI and text independently. Changes take effect after Save settings and reload.") { container ->
+            listOf(uiScale.wrapper, textScale.wrapper).forEach { container.addView(it, spacedMatchWidth(5)) }
+        }, spacedMatchWidth(10))
 
-        customPlotList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
-        renderCustomPlotSettings()
-        body.addView(accordion("Custom plot", tooltip = "Create plot definitions whose x and y sources can be JSON columns, cumulative statistics, or cumulative personal-finance metrics.") { container ->
-            container.addView(infoText("Source syntax: column:date, column:price, row:index, stat:price:median, finance:price:netCashFlow. Bare JSON keys are treated as columns. Each enabled definition creates History, Accumulation, and Normal distribution plots under Stat → Custom plots.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
-            container.addView(customPlotList, matchWidth())
-            container.addView(styledButton("+ Add custom plot").apply { setOnClickListener { editCustomPlot(null) } }, spacedMatchWidth(4))
-        }, spacedMatchWidth(12))
+        if (developerMode) {
+            body.addView(accordion("Schema & Display", tooltip = "Schema overrides, category colors, plot-enabled columns, and finance-report columns.") { container ->
+                listOf(array.wrapper, date.wrapper, money.wrapper, ticker.wrapper, tags.wrapper, tickerColors.wrapper, plotColumns.wrapper, financeColumns.wrapper)
+                    .forEach { container.addView(it, spacedMatchWidth(5)) }
+            }, spacedMatchWidth(10))
 
-        body.addView(styledButton("Save Exvia settings and reload").apply { setOnClickListener { saveSettings() } }, spacedMatchWidth(6))
-        body.addView(styledButton("Close Exvia Settings", accent = SECONDARY).apply { setOnClickListener { drawerRoot.closeDrawer() } }, spacedMatchWidth(6))
+            customMetricList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
+            renderCustomMetricSettings()
+            body.addView(accordion("Custom metric", tooltip = "Create JavaScript metrics evaluated locally against the current filtered JSON.") { container ->
+                container.addView(infoText("The only injected host object is jsonFile. Parse jsonFile.content yourself with JSON.parse.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+                container.addView(customMetricList, matchWidth())
+                container.addView(styledButton("+ Add custom metric").apply { setOnClickListener { editCustomMetric(null) } }, spacedMatchWidth(4))
+            }, spacedMatchWidth(12))
+
+            customPlotList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
+            renderCustomPlotSettings()
+            body.addView(accordion("Custom plot", tooltip = "Create plot definitions whose axes can use JSON columns, statistics, or finance metrics.") { container ->
+                container.addView(infoText("Examples: column:date, column:price, stat:price:median, finance:price:netCashFlow.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+                container.addView(customPlotList, matchWidth())
+                container.addView(styledButton("+ Add custom plot").apply { setOnClickListener { editCustomPlot(null) } }, spacedMatchWidth(4))
+            }, spacedMatchWidth(12))
+        } else {
+            // Keep late-init properties valid while advanced sections are hidden.
+            customMetricList = LinearLayout(this)
+            customPlotList = LinearLayout(this)
+        }
+
+        body.addView(styledButton("Report").apply { setOnClickListener { showReportDialog() } }, spacedMatchWidth(6))
+        body.addView(styledButton("Save settings and reload").apply { setOnClickListener { saveSettings() } }, spacedMatchWidth(6))
+        body.addView(styledButton("Close Settings", accent = SECONDARY).apply { setOnClickListener { drawerRoot.closeDrawer() } }, spacedMatchWidth(6))
 
         return ScrollView(this).apply { setBackgroundColor(BLACK); addView(body, matchWidth()) }
     }
@@ -643,29 +699,27 @@ class MainActivity : Activity() {
         if (!::customMetricList.isInitialized) return
         customMetricList.removeAllViews()
 
-        customMetricList.addView(infoText("Built-in examples").apply {
-            setTextColor(PRIMARY)
-            AppFonts.apply(this, bold = true)
-        }, spacedMatchWidth(3))
-        customMetricList.addView(infoText("These templates are not enabled automatically. Tap Use to open an editable copy. Each script receives only jsonFile { name, content }.").apply {
-            setTextColor(MUTED)
-        }, spacedMatchWidth(5))
-        BuiltinExamples.customMetrics.forEach { example ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(1), 0, dp(1))
+        customMetricList.addView(accordion("Built-in metric examples", initiallyOpen = false) { examples ->
+            examples.addView(infoText("Templates are disabled until copied. Each receives only jsonFile { name, content }.").apply {
+                setTextColor(MUTED)
+            }, spacedMatchWidth(5))
+            BuiltinExamples.customMetrics.forEach { example ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(1), 0, dp(1))
+                }
+                row.addView(infoText(example.name).apply { setTextColor(WHITE) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(TextView(this).apply {
+                    text = "Use"
+                    gravity = Gravity.CENTER
+                    setTextColor(PRIMARY)
+                    AppFonts.apply(this, textScale = settings.textScale)
+                    setOnClickListener { editCustomMetric(null, example) }
+                }, LinearLayout.LayoutParams(dp(52), dp(30)))
+                examples.addView(row, matchWidth())
             }
-            row.addView(infoText(example.name).apply { setTextColor(WHITE) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            row.addView(TextView(this).apply {
-                text = "Use"
-                gravity = Gravity.CENTER
-                setTextColor(PRIMARY)
-                AppFonts.apply(this)
-                setOnClickListener { editCustomMetric(null, example) }
-            }, LinearLayout.LayoutParams(dp(52), dp(30)))
-            customMetricList.addView(row, matchWidth())
-        }
+        }, spacedMatchWidth(5))
 
         customMetricList.addView(infoText("Your custom metrics").apply {
             setTextColor(PRIMARY)
@@ -816,13 +870,30 @@ class MainActivity : Activity() {
     }
 
     private fun saveSettings() {
-        val paletteInputs = listOf(primarySetting to "Primary", secondarySetting to "Secondary", tertiarySetting to "Tertiary", quaternarySetting to "Quaternary", quinarySetting to "Quinary", senarySetting to "Senary")
+        val paletteInputs = listOf(
+            primarySetting to "Primary", secondarySetting to "Secondary", tertiarySetting to "Tertiary",
+            quaternarySetting to "Quaternary", quinarySetting to "Quinary", senarySetting to "Senary",
+        )
         var invalid = false
         paletteInputs.forEach { (input, label) ->
             val value = input.text.toString().trim()
-            if (!ThemePalette.isValidHex(value)) { input.error = "$label must be #RRGGBB or #AARRGGBB"; invalid = true }
+            if (!ThemePalette.isValidHex(value)) {
+                input.error = "$label must be #RRGGBB or #AARRGGBB"
+                invalid = true
+            }
+        }
+        val uiScale = uiScaleSetting.text.toString().trim().toDoubleOrNull()
+        val textScale = textScaleSetting.text.toString().trim().toDoubleOrNull()
+        if (uiScale == null || uiScale !in 0.70..1.60) {
+            uiScaleSetting.error = "Use a value from 0.70 to 1.60"
+            invalid = true
+        }
+        if (textScale == null || textScale !in 0.70..1.80) {
+            textScaleSetting.error = "Use a value from 0.70 to 1.80"
+            invalid = true
         }
         if (invalid) return
+
         val selectedTheme = ThemePreset.entries.getOrElse(themeSpinner.selectedItemPosition) { ThemePreset.DEFAULT }
         val next = RepoSettings(
             owner = ownerSetting.text.toString().trim(),
@@ -840,14 +911,136 @@ class MainActivity : Activity() {
             financeColumns = SettingsStore.parseColumnList(financeColumnsSetting.text.toString()),
             customMetrics = customMetricsDraft.toList(),
             customPlots = customPlotsDraft.toList(),
+            reportRepo = reportRepoSetting.text.toString().trim().ifBlank { "finance_app" },
+            uiScale = uiScale!!,
+            textScale = textScale!!,
             themePreset = selectedTheme,
-            palette = ThemePalette(primarySetting.text.toString().trim(), secondarySetting.text.toString().trim(), tertiarySetting.text.toString().trim(), quaternarySetting.text.toString().trim(), quinarySetting.text.toString().trim(), senarySetting.text.toString().trim()),
+            palette = ThemePalette(
+                primarySetting.text.toString().trim(), secondarySetting.text.toString().trim(), tertiarySetting.text.toString().trim(),
+                quaternarySetting.text.toString().trim(), quinarySetting.text.toString().trim(), senarySetting.text.toString().trim(),
+            ),
         )
         settingsStore.save(next)
-        val newToken = tokenSetting.text.toString().trim()
-        if (newToken.isNotBlank()) tokenStore.save(newToken)
+        val enteredToken = tokenSetting.text.toString().trim()
+        if (enteredToken.isNotBlank()) tokenStore.save(enteredToken)
+        val token = tokenStore.load()
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_SELECTED_PATH).apply()
-        recreate()
+
+        if (token == null || !next.isConfigured()) {
+            Toast.makeText(this, "Settings saved locally. GitHub config sync needs a PAT and configured repository.", Toast.LENGTH_LONG).show()
+            recreate()
+            return
+        }
+
+        setBusy(true, "Saving settings and syncing ${GitHubApi.CONFIG_PATH}…")
+        val configJson = SettingsStore.settingsToConfigJson(next, filterSnippets, developerMode)
+        executor.execute {
+            try {
+                GitHubApi(token, next).upsertTextFile(
+                    GitHubApi.CONFIG_PATH,
+                    configJson,
+                    "Update Exvia configuration",
+                )
+                runOnUiThread {
+                    statusText.text = "Settings saved and synchronized. Reloading…"
+                    recreate()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    setBusy(false)
+                    handleError(e, "Settings saved locally, but config sync failed")
+                    AlertDialog.Builder(this)
+                        .setTitle("Configuration sync failed")
+                        .setMessage("Your settings were saved on this device, but ${GitHubApi.CONFIG_PATH} could not be pushed. Check the PAT and repository permissions, then press Save settings and reload again.")
+                        .setNegativeButton("Close", null)
+                        .create().also { showDialog(it) }
+                }
+            }
+        }
+    }
+
+    private fun showReportDialog() {
+        val token = tokenStore.load()
+        if (token == null) {
+            AlertDialog.Builder(this)
+                .setTitle("GitHub PAT required")
+                .setMessage("A GitHub PAT with Issues: write permission is required to submit a report.")
+                .setNegativeButton("Close", null)
+                .create().also { showDialog(it) }
+            return
+        }
+        val categories = listOf("Bug", "Enhancement", "Feature")
+        val typeSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, categories)
+            backgroundTintList = inputTint()
+        }
+        val reportInput = styledInput("report.description").apply {
+            isSingleLine = false
+            minLines = 6
+            gravity = Gravity.TOP
+            hint = "Describe the problem or requested change"
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+            setBackgroundColor(BLACK)
+            addView(infoText("Reports are created as GitHub Issues in ${settings.owner}/${settings.reportRepo}.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(typeSpinner, spacedMatchWidth(6))
+            addView(reportInput, matchWidth())
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Report")
+            .setView(body)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Submit", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val description = reportInput.text.toString().trim()
+                if (description.isBlank()) {
+                    reportInput.error = "Describe the report"
+                    return@setOnClickListener
+                }
+                val prefix = when (typeSpinner.selectedItemPosition) {
+                    0 -> "bug:"
+                    1 -> "ench:"
+                    else -> "feat:"
+                }
+                val summary = description.lineSequence().firstOrNull { it.isNotBlank() }
+                    ?.trim()?.replace(Regex("\\s+"), " ")?.take(90)
+                    .orEmpty().ifBlank { categories[typeSpinner.selectedItemPosition] }
+                val issueTitle = "$prefix $summary"
+                val issueBody = buildString {
+                    append(description)
+                    append("\n\n---\n")
+                    append("Submitted from Exvia 1.11\n")
+                    append("Classification: ${categories[typeSpinner.selectedItemPosition]}\n")
+                    append("Data repository: ${settings.owner}/${settings.repo}\n")
+                    append("Branch: ${settings.branch}\n")
+                    append("Developer Options: ${if (developerMode) "enabled" else "hidden"}\n")
+                }
+                dialog.dismiss()
+                setBusy(true, "Creating issue in ${settings.owner}/${settings.reportRepo}…")
+                executor.execute {
+                    try {
+                        val url = GitHubApi(token, settings).createIssue(
+                            settings.owner,
+                            settings.reportRepo,
+                            issueTitle,
+                            issueBody,
+                        )
+                        runOnUiThread {
+                            setBusy(false)
+                            statusText.text = if (url.isBlank()) "Report submitted." else "Report submitted: $url"
+                            Toast.makeText(this, "GitHub Issue created", Toast.LENGTH_LONG).show()
+                        }
+                    } catch (e: Exception) {
+                        runOnUiThread { handleError(e, "Report submission failed") }
+                    }
+                }
+            }
+        }
+        showDialog(dialog)
     }
 
     private fun promptRepositoryInitialization() {
@@ -1037,7 +1230,7 @@ class MainActivity : Activity() {
         currentData = data
         renderDynamicForm(data)
         applyFilterAndRender(showStatus = false)
-        if (::drawerRoot.isInitialized) AppFonts.applyToTree(drawerRoot)
+        if (::drawerRoot.isInitialized) AppFonts.applyToTree(drawerRoot, settings.textScale)
     }
 
     private fun applyFilterAndRender(showStatus: Boolean) {
@@ -1150,39 +1343,48 @@ class MainActivity : Activity() {
 
     private fun showFilterSnippetManager() {
         var managerDialog: AlertDialog? = null
-        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(4), dp(12), dp(4)); setBackgroundColor(BLACK) }
-        list.addView(infoText("Examples").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(3))
-        BuiltinExamples.filterSnippets.forEach { snippet ->
-            val choose = TextView(this).apply {
-                text = "${snippet.name}\n${snippet.query}"
-                maxLines = 3
-                textSize = 11.5f
-                setTextColor(WHITE)
-                setPadding(dp(5), dp(4), dp(5), dp(4))
-                AppFonts.apply(this)
-                setOnClickListener {
-                    filterInput.setText(snippet.query)
-                    filterQuery = snippet.query
-                    managerDialog?.dismiss()
-                }
-            }
-            list.addView(choose, spacedMatchWidth(3))
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            setBackgroundColor(BLACK)
         }
-        list.addView(infoText("Saved snippets").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(3))
+        list.addView(accordion("Built-in examples", initiallyOpen = false) { examples ->
+            BuiltinExamples.filterSnippets.forEach { snippet ->
+                examples.addView(TextView(this).apply {
+                    text = "${snippet.name}\n${snippet.query}"
+                    maxLines = 3
+                    textSize = 11.5f
+                    setTextColor(WHITE)
+                    setPadding(dp(5), dp(4), dp(5), dp(4))
+                    AppFonts.apply(this, textScale = settings.textScale)
+                    setOnClickListener {
+                        selectFilterSnippet(snippet)
+                        managerDialog?.dismiss()
+                    }
+                }, spacedMatchWidth(3))
+            }
+        }, spacedMatchWidth(5))
+
+        list.addView(infoText("Saved snippets").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true, textScale = settings.textScale) }, spacedMatchWidth(3))
         if (filterSnippets.isEmpty()) list.addView(infoText("No saved filtering snippets.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
         filterSnippets.forEach { snippet ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(2), 0, dp(2)) }
             val choose = TextView(this).apply {
-                text = "${snippet.name}\n${snippet.query}"; maxLines = 2; textSize = 11.5f; setTextColor(WHITE); setPadding(dp(5), dp(3), dp(5), dp(3)); AppFonts.apply(this)
-                setOnClickListener { filterInput.setText(snippet.query); filterQuery = snippet.query; managerDialog?.dismiss() }
+                text = "${snippet.name}\n${snippet.query}"
+                maxLines = 2
+                textSize = 11.5f
+                setTextColor(WHITE)
+                setPadding(dp(5), dp(3), dp(5), dp(3))
+                AppFonts.apply(this, textScale = settings.textScale)
+                setOnClickListener { selectFilterSnippet(snippet); managerDialog?.dismiss() }
             }
             row.addView(choose, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             row.addView(TextView(this).apply {
-                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this)
+                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this, textScale = settings.textScale)
                 setOnClickListener { managerDialog?.dismiss(); editFilterSnippet(snippet) }
             }, LinearLayout.LayoutParams(dp(48), dp(34)))
             row.addView(TextView(this).apply {
-                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true)
+                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true, textScale = settings.textScale)
                 setOnClickListener {
                     managerDialog?.dismiss()
                     filterSnippets.removeAll { it.id == snippet.id }
@@ -1196,6 +1398,62 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this).apply { addView(list, matchWidth()) }
         managerDialog = AlertDialog.Builder(this).setTitle("Filtering snippets").setView(scroll).setNegativeButton("Close", null).create()
         showDialog(managerDialog!!)
+    }
+
+    /** Regular-mode selector: methods are named, but their SQL-like implementation remains hidden. */
+    private fun showFilteringMethodManager() {
+        var dialog: AlertDialog? = null
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            setBackgroundColor(BLACK)
+        }
+        list.addView(infoText("Choose a filtering method. Developer Options expose and edit the underlying syntax.").apply {
+            setTextColor(MUTED)
+        }, spacedMatchWidth(6))
+
+        list.addView(accordion("Built-in methods", initiallyOpen = false) { builtins ->
+            BuiltinExamples.filterSnippets.forEach { snippet ->
+                builtins.addView(TextView(this).apply {
+                    text = snippet.name
+                    setTextColor(WHITE)
+                    setPadding(dp(8), dp(6), dp(8), dp(6))
+                    AppFonts.apply(this, textScale = settings.textScale)
+                    setOnClickListener { selectFilterSnippet(snippet); dialog?.dismiss() }
+                }, matchWidth())
+            }
+        }, spacedMatchWidth(5))
+
+        list.addView(accordion("Saved methods", initiallyOpen = true) { saved ->
+            if (filterSnippets.isEmpty()) {
+                saved.addView(infoText("No saved methods. Enable Developer Options to create one.").apply { setTextColor(MUTED) }, matchWidth())
+            } else {
+                filterSnippets.forEach { snippet ->
+                    saved.addView(TextView(this).apply {
+                        text = snippet.name
+                        setTextColor(WHITE)
+                        setPadding(dp(8), dp(6), dp(8), dp(6))
+                        AppFonts.apply(this, textScale = settings.textScale)
+                        setOnClickListener { selectFilterSnippet(snippet); dialog?.dismiss() }
+                    }, matchWidth())
+                }
+            }
+        }, spacedMatchWidth(5))
+
+        val scroll = ScrollView(this).apply { addView(list, matchWidth()) }
+        dialog = AlertDialog.Builder(this)
+            .setTitle("Filtering method")
+            .setView(scroll)
+            .setNegativeButton("Close", null)
+            .create()
+        showDialog(dialog!!)
+    }
+
+    private fun selectFilterSnippet(snippet: FilterSnippet) {
+        filterQuery = snippet.query
+        filterInput.setText(snippet.query)
+        filteringMethodButton.text = snippet.name
+        if (filterEnabled) applyFilterAndRender(showStatus = true)
     }
 
     private fun editFilterSnippet(existing: FilterSnippet?) {
@@ -1861,13 +2119,14 @@ class MainActivity : Activity() {
         val title = filesScreen.findViewWithTag<TextView>("folder_title")
         title?.text = "${settings.folder.trimEnd('/')}/"
         filesList.removeAllViews()
-        if (files.isEmpty()) {
+        val visibleFiles = files.filterNot { it.name.startsWith(".") || it.name.equals(GitHubApi.CONFIG_FILE_NAME, true) }
+        if (visibleFiles.isEmpty()) {
             filesList.addView(infoText("No .json files"), matchWidth())
             removeFileButton.isEnabled = false
             return
         }
-        removeFileButton.isEnabled = !busy && selectedPath != null
-        files.forEach { file ->
+        removeFileButton.isEnabled = !busy && selectedPath != null && visibleFiles.any { it.path == selectedPath }
+        visibleFiles.forEach { file ->
             val selected = file.path == selectedPath
             filesList.addView(TextView(this).apply {
                 text = file.name
@@ -1999,7 +2258,7 @@ class MainActivity : Activity() {
             setStroke(dp(1).coerceAtLeast(1), PRIMARY)
             cornerRadius = dp(5).toFloat()
         })
-        dialog.window?.decorView?.let { AppFonts.applyToTree(it) }
+        dialog.window?.decorView?.let { AppFonts.applyToTree(it, settings.textScale) }
         dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.let {
             it.setTextColor(PRIMARY)
             it.background = inactiveActionBackground(PRIMARY)
@@ -2127,5 +2386,5 @@ class MainActivity : Activity() {
     private fun matchWidth() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
     private fun spacedMatchWidth(bottomDp: Int) = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(bottomDp) }
     private fun frameMatch() = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density * settings.uiScale).toInt()
 }

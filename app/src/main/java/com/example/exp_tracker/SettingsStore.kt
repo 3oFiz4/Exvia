@@ -58,6 +58,9 @@ class SettingsStore(context: Context) {
             financeColumns = parseColumnList(prefs.getString(KEY_FINANCE_COLUMNS, "price") ?: "price"),
             customMetrics = parseCustomMetrics(prefs.getString(KEY_CUSTOM_METRICS, "[]") ?: "[]"),
             customPlots = parseCustomPlots(prefs.getString(KEY_CUSTOM_PLOTS, "[]") ?: "[]"),
+            reportRepo = prefs.getString(KEY_REPORT_REPO, "finance_app") ?: "finance_app",
+            uiScale = prefs.getString(KEY_UI_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.60) ?: 1.0,
+            textScale = prefs.getString(KEY_TEXT_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.80) ?: 1.0,
             themePreset = preset,
             palette = palette,
         )
@@ -80,6 +83,9 @@ class SettingsStore(context: Context) {
             .putString(KEY_FINANCE_COLUMNS, settings.financeColumns.joinToString(", "))
             .putString(KEY_CUSTOM_METRICS, customMetricsToJson(settings.customMetrics))
             .putString(KEY_CUSTOM_PLOTS, customPlotsToJson(settings.customPlots))
+            .putString(KEY_REPORT_REPO, settings.reportRepo.trim().ifBlank { "finance_app" })
+            .putString(KEY_UI_SCALE, settings.uiScale.toString())
+            .putString(KEY_TEXT_SCALE, settings.textScale.toString())
             .putString(KEY_THEME_PRESET, settings.themePreset.id)
             .putString(KEY_PRIMARY, settings.palette.primary)
             .putString(KEY_SECONDARY, settings.palette.secondary)
@@ -92,6 +98,10 @@ class SettingsStore(context: Context) {
 
     fun repoInitializationAsked(): Boolean = prefs.getBoolean(KEY_REPO_INIT_ASKED, false)
     fun setRepoInitializationAsked(value: Boolean) { prefs.edit().putBoolean(KEY_REPO_INIT_ASKED, value).apply() }
+
+    // Developer mode is intentionally ON for a fresh install. Triple-tapping the Exvia title toggles it.
+    fun developerModeEnabled(): Boolean = prefs.getBoolean(KEY_DEVELOPER_MODE, true)
+    fun setDeveloperModeEnabled(value: Boolean) { prefs.edit().putBoolean(KEY_DEVELOPER_MODE, value).apply() }
 
     fun loadFilterSnippets(): List<FilterSnippet> = parseFilterSnippets(prefs.getString(KEY_FILTER_SNIPPETS, "[]") ?: "[]")
     fun saveFilterSnippets(items: List<FilterSnippet>) { prefs.edit().putString(KEY_FILTER_SNIPPETS, filterSnippetsToJson(items)).apply() }
@@ -116,6 +126,10 @@ class SettingsStore(context: Context) {
         private const val KEY_CUSTOM_PLOTS = "custom_plots"
         private const val KEY_FILTER_SNIPPETS = "filter_snippets"
         private const val KEY_REPO_INIT_ASKED = "repo_initialization_asked"
+        private const val KEY_DEVELOPER_MODE = "developer_mode"
+        private const val KEY_REPORT_REPO = "report_repo"
+        private const val KEY_UI_SCALE = "ui_scale"
+        private const val KEY_TEXT_SCALE = "text_scale"
         private const val KEY_THEME_PRESET = "theme_preset"
         private const val KEY_PRIMARY = "theme_primary"
         private const val KEY_SECONDARY = "theme_secondary"
@@ -139,6 +153,50 @@ class SettingsStore(context: Context) {
         }
 
         fun colorsToText(colors: Map<String, String>): String = colors.entries.joinToString("\n") { "${it.key}=${it.value}" }
+
+        /** Serializes sync-safe application configuration. The GitHub PAT is intentionally excluded. */
+        fun settingsToConfigJson(
+            settings: RepoSettings,
+            filterSnippets: List<FilterSnippet>,
+            developerMode: Boolean,
+        ): String = JSONObject().apply {
+            put("format", "exvia-config-v1")
+            put("developerMode", developerMode)
+            put("github", JSONObject().apply {
+                put("owner", settings.owner)
+                put("repo", settings.repo)
+                put("branch", settings.branch)
+                put("folder", settings.folder)
+                put("defaultFile", settings.defaultJson)
+                put("reportRepo", settings.reportRepo)
+            })
+            put("schema", JSONObject().apply {
+                put("arrayKey", settings.arrayKey)
+                put("dateKey", settings.dateKeyOverride)
+                put("moneyKey", settings.moneyKeyOverride)
+                put("tickerKey", settings.tickerKeyOverride)
+                put("tagsKey", settings.tagsKeyOverride)
+            })
+            put("display", JSONObject().apply {
+                put("tickerColors", JSONObject(settings.tickerColors))
+                put("plotColumns", JSONArray(settings.plotColumns))
+                put("financeColumns", JSONArray(settings.financeColumns))
+                put("uiScale", settings.uiScale)
+                put("textScale", settings.textScale)
+            })
+            put("theme", JSONObject().apply {
+                put("preset", settings.themePreset.id)
+                put("primary", settings.palette.primary)
+                put("secondary", settings.palette.secondary)
+                put("tertiary", settings.palette.tertiary)
+                put("quaternary", settings.palette.quaternary)
+                put("quinary", settings.palette.quinary)
+                put("senary", settings.palette.senary)
+            })
+            put("customMetrics", JSONArray(customMetricsToJson(settings.customMetrics)))
+            put("customPlots", JSONArray(customPlotsToJson(settings.customPlots)))
+            put("filterSnippets", JSONArray(filterSnippetsToJson(filterSnippets)))
+        }.toString(2) + "\n"
 
         fun parseColumnList(text: String): List<String> = text.split(',', '\n')
             .map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }

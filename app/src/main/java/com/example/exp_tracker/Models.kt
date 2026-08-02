@@ -64,6 +64,9 @@ data class RepoSettings(
     val financeColumns: List<String>,
     val customMetrics: List<CustomMetricDefinition>,
     val customPlots: List<CustomPlotDefinition>,
+    val reportRepo: String,
+    val uiScale: Double,
+    val textScale: Double,
     val themePreset: ThemePreset,
     val palette: ThemePalette,
 ) {

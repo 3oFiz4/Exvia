@@ -20,6 +20,10 @@ class GitHubApi(
     private val token: String,
     private val settings: RepoSettings,
 ) {
+    companion object {
+        const val CONFIG_FILE_NAME = ".exvia-config.json"
+        const val CONFIG_PATH = "Financial/.exvia-config.json"
+    }
     private data class EditableDocument(val root: Any, val items: JSONArray)
 
     fun listExpenseFiles(): List<RepoFile> {
@@ -34,8 +38,33 @@ class GitHubApi(
             val item = array.optJSONObject(index) ?: return@mapNotNull null
             val name = item.optString("name")
             if (item.optString("type") != "file" || !name.endsWith(".json", ignoreCase = true)) return@mapNotNull null
+            if (name.equals(CONFIG_FILE_NAME, ignoreCase = true) || name.startsWith(".")) return@mapNotNull null
             RepoFile(name, item.optString("path"), item.optString("sha"))
         }.sortedByDescending { it.name.lowercase() }
+    }
+
+
+    /** Creates or replaces a UTF-8 text file through the GitHub Contents API. */
+    fun upsertTextFile(path: String, text: String, message: String) {
+        val sha = try {
+            getFile(path).sha
+        } catch (e: GitHubHttpException) {
+            if (e.statusCode == 404) null else throw e
+        }
+        putFile(path, text, sha, message)
+    }
+
+    /** Creates an issue in the requested repository using the current PAT. */
+    fun createIssue(targetOwner: String, targetRepo: String, title: String, bodyText: String): String {
+        require(targetOwner.isNotBlank()) { "Issue owner is required." }
+        require(targetRepo.isNotBlank()) { "Issue repository is required." }
+        require(title.isNotBlank()) { "Issue title is required." }
+        val url = "https://api.github.com/repos/${encodeSegment(targetOwner)}/${encodeSegment(targetRepo)}/issues"
+        val response = JSONObject(request("POST", url, JSONObject().apply {
+            put("title", title)
+            put("body", bodyText)
+        }.toString()))
+        return response.optString("html_url")
     }
 
     fun fetchTable(path: String): TableData = parseTable(getFile(path).text)
@@ -384,6 +413,9 @@ class GitHubApi(
         require(name.isNotEmpty()) { "File name is required." }
         require('/' !in name && '\\' !in name) { "Enter a file name only, not a path." }
         if (!name.endsWith(".json", ignoreCase = true)) name += ".json"
+        require(!name.equals(CONFIG_FILE_NAME, ignoreCase = true) && !name.startsWith(".")) {
+            "Hidden Exvia configuration file names are reserved."
+        }
         require(name.length <= 120) { "File name is too long." }
         return name
     }
