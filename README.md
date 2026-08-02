@@ -28,7 +28,7 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
   }
 ]
 ```
-5. Ensure every changes it commited, now git clone this repository on your Android Studio `git clone https://github.com/3oFiz4/exp_tracker`
+5. Ensure every changes it commited, now git clone this repository on your Android Studio `git clone https://github.com/3oFiz4/Exvia`
 6. Install the apk
 7. When you open the app for the first time, you will be instructed to input everything to the config (autosaves) it will require you to input your GitHub PAT, copy your GitHub PAT and paste it there. This is the "password" or "token" to access your repository, because it is private.
 8. Enjoy
