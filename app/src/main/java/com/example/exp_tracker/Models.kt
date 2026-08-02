@@ -43,8 +43,8 @@ data class FilterSnippet(
 data class CustomPlotDefinition(
     val id: String,
     val name: String,
-    val xSource: String,
-    val ySource: String,
+    val script: String,
+    val engine: String = "auto",
     val enabled: Boolean = true,
 )
 
@@ -69,6 +69,7 @@ data class RepoSettings(
     val textScale: Double,
     val themePreset: ThemePreset,
     val palette: ThemePalette,
+    val plotTheme: PlotTheme,
 ) {
     fun pathFor(fileName: String): String = listOf(
         folder.trim('/'),

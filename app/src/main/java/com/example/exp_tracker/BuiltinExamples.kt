@@ -208,4 +208,130 @@ object BuiltinExamples {
             """.trimIndent(),
         ),
     )
+
+    /** Script templates run with d3, Plot, aq, jsonFile, context, theme, and helpers already initialized. */
+    val customPlots: List<CustomPlotDefinition> = listOf(
+        CustomPlotDefinition(
+            id = "example_plot_scatter",
+            name = "Example · Observable expense scatter",
+            engine = "observable",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const dateKey = keys.find(k => ['date','datetime','timestamp','time','created_at','createdat'].includes(k.toLowerCase()));
+                if (!moneyKey) throw new Error('No money-like key');
+                const points = rows.map((r, i) => {
+                  const parsed = dateKey ? helpers.parseDate(r[dateKey]) : null;
+                  return {x: dateKey ? parsed : i, y: helpers.number(r[moneyKey]), label:String(r[dateKey] ?? i)};
+                }).filter(d => (d.x instanceof Date ? !Number.isNaN(+d.x) : Number.isFinite(d.x)) && Number.isFinite(d.y));
+                return Plot.plot({
+                  width: context.width, height: context.height,
+                  style: {background: theme.background, color: theme.text},
+                  grid: true,
+                  marks: [
+                    Plot.dot(points, {x:'x', y:'y', fill:theme.observation, r:4, tip:true}),
+                    Plot.linearRegressionY(points, {x:'x', y:'y', stroke:theme.accent})
+                  ]
+                });
+            """.trimIndent(),
+        ),
+        CustomPlotDefinition(
+            id = "example_plot_week_hour_heatmap",
+            name = "Example · Observable weekday/hour heatmap",
+            engine = "observable",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const dateKey = keys.find(k => ['date','datetime','timestamp','time','created_at','createdat'].includes(k.toLowerCase()));
+                if (!moneyKey || !dateKey) throw new Error('Money/date key not found');
+                const prepared = rows.map(r => {
+                  const t = helpers.parseDate(r[dateKey]);
+                  if (!t) return null;
+                  return {day:t.toLocaleDateString(undefined,{weekday:'short'}), hour:t.getHours(), amount:Math.abs(helpers.number(r[moneyKey]))};
+                }).filter(d => d && Number.isFinite(d.hour) && Number.isFinite(d.amount));
+                const grouped = aq.from(prepared).groupby('day','hour').rollup({amount:d=>aq.op.sum(d.amount)}).objects();
+                return Plot.plot({
+                  width:context.width, height:context.height,
+                  style:{background:theme.background,color:theme.text},
+                  color:{scheme:'turbo'},
+                  marks:[Plot.cell(grouped,{x:'hour',y:'day',fill:'amount',inset:1,tip:true})]
+                });
+            """.trimIndent(),
+        ),
+        CustomPlotDefinition(
+            id = "example_plot_category_bar",
+            name = "Example · Observable category totals",
+            engine = "observable",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const categoryKey = keys.find(k => ['ticker','category','code','type'].includes(k.toLowerCase()));
+                if (!moneyKey || !categoryKey) throw new Error('Money/category key not found');
+                const prepared = rows.map(r => ({category:String(r[categoryKey] ?? 'Other'), amount:Math.abs(helpers.number(r[moneyKey]))})).filter(d=>Number.isFinite(d.amount));
+                const totals = aq.from(prepared).groupby('category').rollup({amount:d=>aq.op.sum(d.amount)}).orderby(aq.desc('amount')).objects();
+                return Plot.plot({
+                  width:context.width,height:context.height,
+                  marginLeft:80,style:{background:theme.background,color:theme.text},
+                  marks:[Plot.barX(totals,{x:'amount',y:'category',sort:{y:'-x'},fill:theme.accent,tip:true}),Plot.ruleX([0])]
+                });
+            """.trimIndent(),
+        ),
+        CustomPlotDefinition(
+            id = "example_plot_calendar_heatmap",
+            name = "Example · D3 calendar heatmap",
+            engine = "d3",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const dateKey = keys.find(k => ['date','datetime','timestamp','time','created_at','createdat'].includes(k.toLowerCase()));
+                if (!moneyKey || !dateKey) throw new Error('Money/date key not found');
+                const valid = rows.map(r => ({row:r, date:helpers.parseDate(r[dateKey])})).filter(d => d.date);
+                const daily = d3.rollups(valid, v=>d3.sum(v,d=>Math.abs(helpers.number(d.row[moneyKey]))||0), d=>d3.timeDay(d.date))
+                  .filter(d=>!Number.isNaN(+d[0])).sort((a,b)=>a[0]-b[0]);
+                const cell=13, width=context.width, height=Math.max(170,Math.ceil(daily.length/7)*cell+40);
+                const svg=d3.create('svg').attr('viewBox',[0,0,width,height]).style('background',theme.background).style('color',theme.text);
+                const color=d3.scaleSequential(d3.interpolateTurbo).domain([0,d3.max(daily,d=>d[1])||1]);
+                svg.selectAll('rect').data(daily).join('rect').attr('x',(d,i)=>22+Math.floor(i/7)*cell).attr('y',(d,i)=>18+(i%7)*cell)
+                  .attr('width',cell-2).attr('height',cell-2).attr('rx',2).attr('fill',d=>color(d[1]))
+                  .append('title').text(d=>`${'$'}{d3.timeFormat('%Y-%m-%d')(d[0])}: ${'$'}{helpers.format(d[1])}`);
+                return svg.node();
+            """.trimIndent(),
+        ),
+        CustomPlotDefinition(
+            id = "example_plot_circle_pack",
+            name = "Example · D3 category circle pack",
+            engine = "d3",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const categoryKey = keys.find(k => ['ticker','category','code','type'].includes(k.toLowerCase()));
+                if (!moneyKey || !categoryKey) throw new Error('Money/category key not found');
+                const totals = d3.rollups(rows, v=>d3.sum(v,r=>Math.abs(helpers.number(r[moneyKey]))||0), r=>String(r[categoryKey]||'Other'));
+                const root=d3.hierarchy({children:totals.map(([name,value])=>({name,value}))}).sum(d=>d.value||0);
+                const size=Math.min(context.width,context.height); d3.pack().size([context.width,context.height]).padding(5)(root);
+                const svg=d3.create('svg').attr('viewBox',[0,0,context.width,context.height]).style('background',theme.background);
+                const nodes=svg.selectAll('g').data(root.leaves()).join('g').attr('transform',d=>`translate(${'$'}{d.x},${'$'}{d.y})`);
+                nodes.append('circle').attr('r',d=>d.r).attr('fill',theme.accent).attr('fill-opacity',.75).attr('stroke',theme.center);
+                nodes.append('text').attr('text-anchor','middle').attr('dy','.35em').attr('fill',theme.text).style('font-size','11px').text(d=>d.data.name);
+                nodes.append('title').text(d=>`${'$'}{d.data.name}: ${'$'}{helpers.format(d.value)}`);
+                return svg.node();
+            """.trimIndent(),
+        ),
+    )
+
 }

@@ -10,8 +10,11 @@ android {
         applicationId = "com.example.exp_tracker"
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "1.11"
+        versionCode = 14
+        versionName = "1.12.1"
+        val hasExistingLogo = file("src/main/assets/logo.png").exists() ||
+            file("src/main/res/drawable-nodpi/exvia_logo.png").exists()
+        manifestPlaceholders["exviaAppIcon"] = if (hasExistingLogo) "@drawable/exvia_logo" else "@android:drawable/sym_def_app_icon"
     }
 
     compileOptions {
@@ -24,7 +27,9 @@ android {
 // Keep the Android launcher icon synchronized with app/src/main/assets/logo.png.
 // Replace that asset with the final Exvia logo before building.
 val syncExviaLogo by tasks.registering(Copy::class) {
-    from("src/main/assets/logo.png")
+    val sourceLogo = file("src/main/assets/logo.png")
+    onlyIf { sourceLogo.exists() }
+    from(sourceLogo)
     into("src/main/res/drawable-nodpi")
     rename { "exvia_logo.png" }
 }

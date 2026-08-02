@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6.17/dist/plot.umd.min.js https://cdn.jsdelivr.net/npm/arquero@8.0.3/dist/arquero.min.js; style-src 'self' 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'self';">
+  <style>
+    @font-face { font-family: ExviaJetBrains; src: url('../fonts/JetBrains.ttf') format('truetype'); font-display: swap; }
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#000; }
+    body { font-family: ExviaJetBrains, monospace; -webkit-tap-highlight-color: transparent; }
+    #plot-root { position:relative; width:100%; height:100%; overflow:hidden; }
+    #plot-root > svg, #plot-root > figure { display:block; max-width:none; }
+    .exvia-error { padding:12px; color:#F72323; white-space:pre-wrap; font-size:12px; }
+    .exvia-tooltip { position:absolute; pointer-events:none; z-index:20; border:1px solid; border-radius:4px; padding:6px 8px; font:11px ExviaJetBrains, monospace; max-width:260px; white-space:pre-line; box-shadow:0 3px 18px rgba(0,0,0,.45); }
+  </style>
+</head>
+<body>
+  <div id="plot-root"></div>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6.17/dist/plot.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/arquero@8.0.3/dist/arquero.min.js"></script>
+  <script src="runtime.js"></script>
+</body>
+</html>

@@ -35,6 +35,8 @@ import android.widget.TableLayout
 import android.widget.TableRow
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.LocalDateTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -57,6 +59,7 @@ class MainActivity : Activity() {
     private lateinit var settingsStore: SettingsStore
     private lateinit var settings: RepoSettings
     private lateinit var tooltipController: TooltipController
+    private lateinit var plotRuntime: PlotWebRuntime
     private lateinit var customMetricEngine: CustomMetricEngine
     private lateinit var fileCache: ExviaFileCache
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -120,6 +123,18 @@ class MainActivity : Activity() {
     private lateinit var senarySetting: EditText
     private lateinit var plotColumnsSetting: EditText
     private lateinit var financeColumnsSetting: EditText
+    private lateinit var plotBackgroundSetting: EditText
+    private lateinit var plotSurfaceSetting: EditText
+    private lateinit var plotTextSetting: EditText
+    private lateinit var plotMutedSetting: EditText
+    private lateinit var plotGridSetting: EditText
+    private lateinit var plotAxisSetting: EditText
+    private lateinit var plotPositiveSetting: EditText
+    private lateinit var plotNegativeSetting: EditText
+    private lateinit var plotObservationSetting: EditText
+    private lateinit var plotOutlierSetting: EditText
+    private lateinit var plotCenterSetting: EditText
+    private lateinit var plotAccentSetting: EditText
     private lateinit var reportRepoSetting: EditText
     private lateinit var uiScaleSetting: EditText
     private lateinit var textScaleSetting: EditText
@@ -151,7 +166,6 @@ class MainActivity : Activity() {
         customPlotsDraft = settings.customPlots.toMutableList()
         filterSnippets = settingsStore.loadFilterSnippets().toMutableList()
         tooltipController = TooltipController(this, { PRIMARY }, { BLACK }, { WHITE })
-        customMetricEngine = CustomMetricEngine(this)
         fileCache = ExviaFileCache(this)
         migrateUiPreferences()
         val lightPalette = isLightPalette(settings.palette)
@@ -161,7 +175,11 @@ class MainActivity : Activity() {
         window.decorView.systemUiVisibility = if (lightPalette) {
             View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         } else 0
+        plotRuntime = PlotWebRuntime(this)
+        customMetricEngine = CustomMetricEngine(plotRuntime) { settings.plotTheme }
         setContentView(buildUi())
+        // Let the first Android frame render, then warm the shared JavaScript runtime.
+        window.decorView.post { plotRuntime.prewarm() }
 
         val token = tokenStore.load()
         when {
@@ -179,6 +197,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        plotRuntime.destroy()
         executor.shutdownNow()
         super.onDestroy()
     }
@@ -518,6 +537,31 @@ class MainActivity : Activity() {
         val senary = colorConfigField("Senary", "theme.senary", settings.palette.senary, "Primary readable text.")
         senarySetting = senary.input
 
+        val plotBackground = colorConfigField("Background", "plot.background", settings.plotTheme.background, "Plot canvas background. Defaults to AMOLED black.")
+        plotBackgroundSetting = plotBackground.input
+        val plotSurface = colorConfigField("Surface", "plot.surface", settings.plotTheme.surface, "Tooltip and secondary plot surface color.")
+        plotSurfaceSetting = plotSurface.input
+        val plotText = colorConfigField("Text", "plot.text", settings.plotTheme.text, "Main chart label and title color.")
+        plotTextSetting = plotText.input
+        val plotMuted = colorConfigField("Muted", "plot.muted", settings.plotTheme.muted, "Secondary labels and helper text.")
+        plotMutedSetting = plotMuted.input
+        val plotGrid = colorConfigField("Grid", "plot.grid", settings.plotTheme.grid, "Plot grid line color.")
+        plotGridSetting = plotGrid.input
+        val plotAxis = colorConfigField("Axis", "plot.axis", settings.plotTheme.axis, "Axes and tick color.")
+        plotAxisSetting = plotAxis.input
+        val plotPositive = colorConfigField("Positive", "plot.positive", settings.plotTheme.positive, "Rising box and positive-series color.")
+        plotPositiveSetting = plotPositive.input
+        val plotNegative = colorConfigField("Negative", "plot.negative", settings.plotTheme.negative, "Falling box and negative-series color.")
+        plotNegativeSetting = plotNegative.input
+        val plotObservation = colorConfigField("Observation", "plot.observation", settings.plotTheme.observation, "Actual observation rhombus and history path.")
+        plotObservationSetting = plotObservation.input
+        val plotOutlier = colorConfigField("Outlier", "plot.outlier", settings.plotTheme.outlier, "Tiny hollow outlier circle color.")
+        plotOutlierSetting = plotOutlier.input
+        val plotCenter = colorConfigField("Center lines", "plot.center", settings.plotTheme.center, "Median and dotted mean line color.")
+        plotCenterSetting = plotCenter.input
+        val plotAccent = colorConfigField("Accent", "plot.accent", settings.plotTheme.accent, "Accumulation, distribution, and custom-plot accent.")
+        plotAccentSetting = plotAccent.input
+
         themeSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, ThemePreset.entries.map { it.displayName })
             backgroundTintList = inputTint()
@@ -563,6 +607,23 @@ class MainActivity : Activity() {
             listOf(uiScale.wrapper, textScale.wrapper).forEach { container.addView(it, spacedMatchWidth(5)) }
         }, spacedMatchWidth(10))
 
+        body.addView(accordion("Plotting", tooltip = "Colors used by the D3.js and Observable Plot runtime. Plot background defaults to black and is independent from the application palette.") { container ->
+            container.addView(infoText("Engine: pre-warmed WebView · D3.js for statistical boxes · Observable Plot for accumulation/distribution · Arquero for table operations.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+            val presets = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            presets.addView(styledButton("Black default").apply {
+                setOnClickListener { applyPlotThemeFields(PlotTheme.default()) }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(3) })
+            presets.addView(styledButton("Ayu plot").apply {
+                setOnClickListener { applyPlotThemeFields(PlotTheme.ayu()) }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(3) })
+            container.addView(presets, spacedMatchWidth(6))
+            listOf(
+                plotBackground.wrapper, plotSurface.wrapper, plotText.wrapper, plotMuted.wrapper,
+                plotGrid.wrapper, plotAxis.wrapper, plotPositive.wrapper, plotNegative.wrapper,
+                plotObservation.wrapper, plotOutlier.wrapper, plotCenter.wrapper, plotAccent.wrapper,
+            ).forEach { container.addView(it, spacedMatchWidth(5)) }
+        }, spacedMatchWidth(10))
+
         if (developerMode) {
             body.addView(accordion("Schema & Display", tooltip = "Schema overrides, category colors, plot-enabled columns, and finance-report columns.") { container ->
                 listOf(array.wrapper, date.wrapper, money.wrapper, ticker.wrapper, tags.wrapper, tickerColors.wrapper, plotColumns.wrapper, financeColumns.wrapper)
@@ -571,16 +632,16 @@ class MainActivity : Activity() {
 
             customMetricList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
             renderCustomMetricSettings()
-            body.addView(accordion("Custom metric", tooltip = "Create JavaScript metrics evaluated locally against the current filtered JSON.") { container ->
-                container.addView(infoText("The only injected host object is jsonFile. Parse jsonFile.content yourself with JSON.parse.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            body.addView(accordion("Custom metric", tooltip = "Create JavaScript metrics evaluated in the shared pre-warmed D3/Observable Plot/Arquero runtime.") { container ->
+                container.addView(infoText("Available modules: d3, Plot, aq, context, theme, helpers, and jsonFile. The editor uses an Ayu syntax theme.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
                 container.addView(customMetricList, matchWidth())
                 container.addView(styledButton("+ Add custom metric").apply { setOnClickListener { editCustomMetric(null) } }, spacedMatchWidth(4))
             }, spacedMatchWidth(12))
 
             customPlotList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
             renderCustomPlotSettings()
-            body.addView(accordion("Custom plot", tooltip = "Create plot definitions whose axes can use JSON columns, statistics, or finance metrics.") { container ->
-                container.addView(infoText("Examples: column:date, column:price, stat:price:median, finance:price:netCashFlow.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            body.addView(accordion("Custom plot", tooltip = "Write a D3.js or Observable Plot script with Arquero available for dataframe handling.") { container ->
+                container.addView(infoText("The script receives d3, Plot, aq, jsonFile, context, theme, and helpers. Return a DOM/SVG node or append to context.container.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
                 container.addView(customPlotList, matchWidth())
                 container.addView(styledButton("+ Add custom plot").apply { setOnClickListener { editCustomPlot(null) } }, spacedMatchWidth(4))
             }, spacedMatchWidth(12))
@@ -695,6 +756,21 @@ class MainActivity : Activity() {
         quaternarySetting.setText(p.quaternary); quinarySetting.setText(p.quinary); senarySetting.setText(p.senary)
     }
 
+    private fun applyPlotThemeFields(theme: PlotTheme) {
+        plotBackgroundSetting.setText(theme.background)
+        plotSurfaceSetting.setText(theme.surface)
+        plotTextSetting.setText(theme.text)
+        plotMutedSetting.setText(theme.muted)
+        plotGridSetting.setText(theme.grid)
+        plotAxisSetting.setText(theme.axis)
+        plotPositiveSetting.setText(theme.positive)
+        plotNegativeSetting.setText(theme.negative)
+        plotObservationSetting.setText(theme.observation)
+        plotOutlierSetting.setText(theme.outlier)
+        plotCenterSetting.setText(theme.center)
+        plotAccentSetting.setText(theme.accent)
+    }
+
     private fun renderCustomMetricSettings() {
         if (!::customMetricList.isInitialized) return
         customMetricList.removeAllViews()
@@ -740,18 +816,16 @@ class MainActivity : Activity() {
         val name = styledInput("custom_metric.name").apply {
             setText(source?.name?.removePrefix("Example · ").orEmpty())
         }
-        val script = styledInput("custom_metric.javascript").apply {
-            isSingleLine = false
-            minLines = 8
-            gravity = Gravity.TOP
+        val script = JavaScriptCodeEditor(this).apply {
+            hint = "custom_metric.javascript"
             setText(source?.script ?: "const rows = JSON.parse(jsonFile.content);\nreturn rows.length;")
         }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, dp(14), 0)
-            addView(infoText("Available host value: jsonFile.name and jsonFile.content. Parse the JSON yourself with JSON.parse(jsonFile.content).").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+            addView(infoText("Available modules: d3, Plot, aq, theme, helpers, context, and jsonFile { name, content }. Parse the effective JSON with JSON.parse(jsonFile.content). Scripts return synchronously.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
             addView(name, spacedMatchWidth(6))
-            addView(script, matchWidth())
+            addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(330)))
         }
         val title = when {
             existing != null -> "Edit custom metric"
@@ -766,7 +840,8 @@ class MainActivity : Activity() {
                 if (n.isBlank()) { name.error = "Name is required"; return@setOnClickListener }
                 if (code.isBlank()) { script.error = "JavaScript is required"; return@setOnClickListener }
                 val next = CustomMetricDefinition(existing?.id ?: UUID.randomUUID().toString(), n, code, existing?.enabled ?: true)
-                if (existing == null) customMetricsDraft += next else customMetricsDraft = customMetricsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
+                customMetricsDraft = if (existing == null) (customMetricsDraft + next).toMutableList()
+                    else customMetricsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
                 renderCustomMetricSettings(); dialog.dismiss()
             }
         }
@@ -776,94 +851,105 @@ class MainActivity : Activity() {
     private fun renderCustomPlotSettings() {
         if (!::customPlotList.isInitialized) return
         customPlotList.removeAllViews()
+        customPlotList.addView(accordion("Built-in plot examples", initiallyOpen = false) { examples ->
+            examples.addView(infoText("The first three templates use Observable Plot; the final two use D3.js directly. Arquero is available in every script.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+            BuiltinExamples.customPlots.forEach { example ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(1), 0, dp(1)) }
+                row.addView(infoText("${example.name}\n${example.engine}").apply { setTextColor(WHITE); textSize = 12f }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(TextView(this).apply {
+                    text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this)
+                    setOnClickListener { editCustomPlot(null, example) }
+                }, LinearLayout.LayoutParams(dp(52), dp(30)))
+                examples.addView(row, matchWidth())
+            }
+        }, spacedMatchWidth(5))
+
+        customPlotList.addView(infoText("Your custom plots").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(3))
         if (customPlotsDraft.isEmpty()) {
             customPlotList.addView(infoText("No custom plots configured.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
             return
         }
         customPlotsDraft.forEach { plot ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(2), 0, dp(2))
-            }
-            row.addView(infoText("${plot.name}\n${plot.xSource} → ${plot.ySource}").apply {
-                setTextColor(if (plot.enabled) WHITE else MUTED)
-                textSize = 12f
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(2), 0, dp(2)) }
+            row.addView(infoText("${plot.name}\n${plot.engine}").apply {
+                setTextColor(if (plot.enabled) WHITE else MUTED); textSize = 12f
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             row.addView(TextView(this).apply {
-                text = if (plot.enabled) "ON" else "OFF"
-                setTextColor(if (plot.enabled) GREEN else MUTED)
-                gravity = Gravity.CENTER
-                AppFonts.apply(this, bold = true)
+                text = if (plot.enabled) "ON" else "OFF"; setTextColor(if (plot.enabled) GREEN else MUTED); gravity = Gravity.CENTER; AppFonts.apply(this, bold = true)
                 setOnClickListener {
                     customPlotsDraft = customPlotsDraft.map { if (it.id == plot.id) it.copy(enabled = !it.enabled) else it }.toMutableList()
                     renderCustomPlotSettings()
                 }
-            }, LinearLayout.LayoutParams(dp(44), dp(32)))
+            }, LinearLayout.LayoutParams(dp(44), dp(30)))
+            row.addView(TextView(this).apply { text = "Edit"; setTextColor(PRIMARY); gravity = Gravity.CENTER; AppFonts.apply(this); setOnClickListener { editCustomPlot(plot) } }, LinearLayout.LayoutParams(dp(50), dp(30)))
             row.addView(TextView(this).apply {
-                text = "Edit"
-                setTextColor(PRIMARY)
-                gravity = Gravity.CENTER
-                AppFonts.apply(this)
-                setOnClickListener { editCustomPlot(plot) }
-            }, LinearLayout.LayoutParams(dp(50), dp(32)))
-            row.addView(TextView(this).apply {
-                text = "×"
-                setTextColor(RED)
-                gravity = Gravity.CENTER
-                AppFonts.apply(this, bold = true)
-                setOnClickListener {
-                    customPlotsDraft.removeAll { it.id == plot.id }
-                    renderCustomPlotSettings()
-                }
-            }, LinearLayout.LayoutParams(dp(34), dp(32)))
+                text = "×"; setTextColor(RED); gravity = Gravity.CENTER; AppFonts.apply(this, bold = true)
+                setOnClickListener { customPlotsDraft.removeAll { it.id == plot.id }; renderCustomPlotSettings() }
+            }, LinearLayout.LayoutParams(dp(34), dp(30)))
             customPlotList.addView(row, matchWidth())
         }
     }
 
-    private fun editCustomPlot(existing: CustomPlotDefinition?) {
-        val name = styledInput("custom_plot.name").apply { setText(existing?.name.orEmpty()) }
-        val xSource = styledInput("custom_plot.x_source").apply { setText(existing?.xSource ?: "column:date") }
-        val ySource = styledInput("custom_plot.y_source").apply { setText(existing?.ySource ?: "column:price") }
-        var enabled = existing?.enabled ?: true
+    private fun editCustomPlot(existing: CustomPlotDefinition?, template: CustomPlotDefinition? = null) {
+        val source = existing ?: template
+        val name = styledInput("custom_plot.name").apply { setText(source?.name?.removePrefix("Example · ").orEmpty()) }
+        val engineNames = listOf("Auto", "Observable Plot", "D3.js")
+        val engineValues = listOf("auto", "observable", "d3")
+        val engine = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, engineNames)
+            backgroundTintList = inputTint()
+            setSelection(engineValues.indexOf(source?.engine ?: "auto").coerceAtLeast(0))
+        }
+        val script = JavaScriptCodeEditor(this).apply {
+            hint = "custom_plot.javascript"
+            setText(source?.script ?: """const rows = helpers.rows(jsonFile);
+const moneyKey = helpers.inferKey(rows, ['price', 'amount', 'cost', 'expense', 'value', 'total', 'money']);
+const dateKey = helpers.inferKey(rows, ['date', 'datetime', 'timestamp', 'time', 'created_at']);
+if (!moneyKey) throw new Error('No numeric/money column detected');
+const points = rows.map((row, index) => ({
+  x: dateKey ? helpers.parseDate(row[dateKey]) : index,
+  y: helpers.number(row[moneyKey])
+})).filter(point => (point.x instanceof Date ? !Number.isNaN(+point.x) : Number.isFinite(point.x)) && Number.isFinite(point.y));
+return Plot.plot({
+  width: context.width,
+  height: context.height,
+  style: helpers.plotStyle(theme),
+  x: {grid: true},
+  y: {grid: true},
+  marks: [
+    Plot.lineY(points, {x: 'x', y: 'y', stroke: theme.accent}),
+    Plot.dot(points, {x: 'x', y: 'y', fill: theme.observation, tip: true})
+  ]
+});""")
+        }
+        var enabled = source?.enabled ?: true
         val enabledButton = styledButton(if (enabled) "Enabled" else "Disabled").apply {
-            setOnClickListener {
-                enabled = !enabled
-                text = if (enabled) "Enabled" else "Disabled"
-                setTextColor(if (enabled) GREEN else MUTED)
-            }
+            setOnClickListener { enabled = !enabled; text = if (enabled) "Enabled" else "Disabled"; setTextColor(if (enabled) GREEN else MUTED) }
         }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, dp(14), 0)
-            addView(infoText("Examples:\nX: column:date | row:index | stat:price:n\nY: column:price | stat:price:median | finance:price:netCashFlow").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(infoText("Available: d3, Plot, aq, jsonFile, context.container, context.width/height, theme, and helpers. Return an SVG/HTMLElement or append directly to context.container. Scripts return synchronously.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
             addView(name, spacedMatchWidth(5))
-            addView(xSource, spacedMatchWidth(5))
-            addView(ySource, spacedMatchWidth(5))
-            addView(enabledButton, matchWidth())
+            addView(engine, spacedMatchWidth(5))
+            addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(390)))
+            addView(enabledButton, spacedMatchWidth(5))
         }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(if (existing == null) "New custom plot" else "Edit custom plot")
-            .setView(body)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
-            .create()
+        val title = when {
+            existing != null -> "Edit custom plot"
+            template != null -> "Use example plot"
+            else -> "New custom plot"
+        }
+        val dialog = AlertDialog.Builder(this).setTitle(title).setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val n = name.text.toString().trim()
-                val x = xSource.text.toString().trim()
-                val y = ySource.text.toString().trim()
+                val n = name.text.toString().trim(); val code = script.text.toString().trim()
                 if (n.isBlank()) { name.error = "Name is required"; return@setOnClickListener }
-                if (x.isBlank()) { xSource.error = "X source is required"; return@setOnClickListener }
-                if (y.isBlank()) { ySource.error = "Y source is required"; return@setOnClickListener }
-                val next = CustomPlotDefinition(existing?.id ?: UUID.randomUUID().toString(), n, x, y, enabled)
-                customPlotsDraft = if (existing == null) {
-                    (customPlotsDraft + next).toMutableList()
-                } else {
-                    customPlotsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
-                }
-                renderCustomPlotSettings()
-                dialog.dismiss()
+                if (code.isBlank()) { script.error = "JavaScript is required"; return@setOnClickListener }
+                val next = CustomPlotDefinition(existing?.id ?: UUID.randomUUID().toString(), n, code, engineValues[engine.selectedItemPosition], enabled)
+                customPlotsDraft = if (existing == null) (customPlotsDraft + next).toMutableList()
+                    else customPlotsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
+                renderCustomPlotSettings(); dialog.dismiss()
             }
         }
         showDialog(dialog)
@@ -878,6 +964,20 @@ class MainActivity : Activity() {
         paletteInputs.forEach { (input, label) ->
             val value = input.text.toString().trim()
             if (!ThemePalette.isValidHex(value)) {
+                input.error = "$label must be #RRGGBB or #AARRGGBB"
+                invalid = true
+            }
+        }
+
+        val plotThemeInputs = listOf(
+            plotBackgroundSetting to "Plot background", plotSurfaceSetting to "Plot surface",
+            plotTextSetting to "Plot text", plotMutedSetting to "Plot muted", plotGridSetting to "Plot grid",
+            plotAxisSetting to "Plot axis", plotPositiveSetting to "Plot positive", plotNegativeSetting to "Plot negative",
+            plotObservationSetting to "Plot observation", plotOutlierSetting to "Plot outlier",
+            plotCenterSetting to "Plot center", plotAccentSetting to "Plot accent",
+        )
+        plotThemeInputs.forEach { (input, label) ->
+            if (!PlotTheme.isValid(input.text.toString().trim())) {
                 input.error = "$label must be #RRGGBB or #AARRGGBB"
                 invalid = true
             }
@@ -918,6 +1018,20 @@ class MainActivity : Activity() {
             palette = ThemePalette(
                 primarySetting.text.toString().trim(), secondarySetting.text.toString().trim(), tertiarySetting.text.toString().trim(),
                 quaternarySetting.text.toString().trim(), quinarySetting.text.toString().trim(), senarySetting.text.toString().trim(),
+            ),
+            plotTheme = PlotTheme(
+                background = plotBackgroundSetting.text.toString().trim(),
+                surface = plotSurfaceSetting.text.toString().trim(),
+                text = plotTextSetting.text.toString().trim(),
+                muted = plotMutedSetting.text.toString().trim(),
+                grid = plotGridSetting.text.toString().trim(),
+                axis = plotAxisSetting.text.toString().trim(),
+                positive = plotPositiveSetting.text.toString().trim(),
+                negative = plotNegativeSetting.text.toString().trim(),
+                observation = plotObservationSetting.text.toString().trim(),
+                outlier = plotOutlierSetting.text.toString().trim(),
+                center = plotCenterSetting.text.toString().trim(),
+                accent = plotAccentSetting.text.toString().trim(),
             ),
         )
         settingsStore.save(next)
@@ -1649,6 +1763,9 @@ class MainActivity : Activity() {
             return
         }
 
+        // One serialization is shared by every custom plot and custom metric in this render pass.
+        val effectiveJson = effectiveJsonFile(data)
+
         val financeKeys = settings.resolvedFinanceColumns(data.keys)
         if (financeKeys.isNotEmpty()) {
             statContent.addView(accordion("Personal finance", tooltip = "Derived personal-finance metrics calculated from the currently visible dataset. Filtering therefore changes every value here.") { financeRoot ->
@@ -1724,41 +1841,20 @@ class MainActivity : Activity() {
 
         val enabledCustomPlots = customPlotsDraft.filter { it.enabled }
         if (enabledCustomPlots.isNotEmpty()) {
-            statContent.addView(accordion("Custom plots", tooltip = "User-configured plots whose axes can come from JSON columns, cumulative statistics, or cumulative finance metrics.") { customRoot ->
+            statContent.addView(accordion("Custom plots", tooltip = "JavaScript plots evaluated locally with D3.js, Observable Plot, and Arquero already initialized.") { customRoot ->
                 enabledCustomPlots.forEach { definition ->
-                    customRoot.addView(accordion(definition.name, tooltip = "X = ${definition.xSource}; Y = ${definition.ySource}. Uses the currently visible/filtered rows.") { plotRoot ->
-                        when (val resolved = CustomPlotEngine.build(data, definition)) {
-                            is CustomPlotEngine.Result.Error -> plotRoot.addView(infoText(resolved.message).apply { setTextColor(RED) }, matchWidth())
-                            is CustomPlotEngine.Result.Success -> {
-                                val series = resolved.series
-                                plotRoot.addView(accordion("History", initiallyOpen = true, tooltip = "Cumulative box timeline for ${series.yDescription} against ${series.xDescription}.") { box ->
-                                    val history = CumulativeBoxPlotView(this@MainActivity).apply {
-                                        setPalette(BLACK, MUTED, WHITE, SURFACE)
-                                        setXAxis(series.timeAxis, series.xLabels)
-                                        setSeries(Statistics.cumulativeBoxSeries(series.points))
-                                    }
-                                    box.addView(history, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340)))
-                                    box.addView(infoText("X: ${series.xDescription} · Y: ${series.yDescription}. Raw column y-values sharing the same date are summed; statistic/finance y-values are evaluated cumulatively per progression step.").apply { setTextColor(MUTED) }, matchWidth())
-                                }, matchWidth())
-                                plotRoot.addView(accordion("Accumulation", tooltip = "Running sum of the resolved custom y-series.") { box ->
-                                    val accumulation = Statistics.cumulativeTotalSeries(series.points)
-                                    val view = InteractiveLinePlotView(this@MainActivity).apply {
-                                        setPalette(BLACK, MUTED, WHITE, SURFACE, Color.rgb(61, 139, 255))
-                                        setSeries(accumulation.map { it.first.toDouble() to it.second }, if (series.timeAxis) InteractiveLinePlotView.AxisKind.TIME else InteractiveLinePlotView.AxisKind.NUMBER)
-                                    }
-                                    box.addView(view, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(230)))
-                                }, matchWidth())
-                                plotRoot.addView(accordion("Normal distribution", tooltip = "Normal probability-density curve fitted to the resolved custom y-series.") { box ->
-                                    val values = series.points.map { it.second }
-                                    val curve = Statistics.normalDistribution(values)
-                                    val view = InteractiveLinePlotView(this@MainActivity).apply {
-                                        setPalette(BLACK, MUTED, WHITE, SURFACE, STAT_QUARTILE)
-                                        setSeries(curve, InteractiveLinePlotView.AxisKind.NUMBER, rugSamples = values)
-                                    }
-                                    box.addView(view, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(230)))
-                                }, matchWidth())
-                            }
+                    customRoot.addView(accordion(definition.name, tooltip = "${definition.engine} script using the current visible/filtered JSON file.") { plotRoot ->
+                        val payload = JSONObject().apply {
+                            put("kind", "custom")
+                            put("engine", definition.engine)
+                            put("script", definition.script)
+                            put("height", 340)
+                            put("theme", settings.plotTheme.toJson())
+                            put("jsonFile", effectiveJson)
                         }
+                        val plot = WebPlotView(this@MainActivity).apply { bind(plotRuntime, payload) }
+                        plotRoot.addView(plot, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340)))
+                        plotRoot.addView(infoText("Runtime: ${definition.engine} · d3, Plot, aq, jsonFile, context, theme, and helpers are available. Filtering changes jsonFile.content.").apply { setTextColor(MUTED) }, matchWidth())
                     }, matchWidth())
                 }
             }, matchWidth())
@@ -1774,7 +1870,7 @@ class MainActivity : Activity() {
                     row.addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                     row.addView(result, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                     container.addView(row, matchWidth())
-                    customMetricEngine.evaluate(metric, data, selectedPath?.substringAfterLast('/') ?: "current.json") { evaluated ->
+                    customMetricEngine.evaluate(metric, effectiveJson) { evaluated ->
                         runOnUiThread {
                             evaluated.fold(
                                 onSuccess = { result.text = it; result.setTextColor(WHITE) },
@@ -1875,69 +1971,96 @@ class MainActivity : Activity() {
         else -> "Statistic calculated from the currently visible rows."
     }
 
-    private data class GraphResult(val view: CumulativeBoxPlotView?, val legend: String?)
+    private data class WebPlotResult(val view: WebPlotView?, val legend: String?)
 
-    private fun buildGraph(data: TableData, key: String): GraphResult {
-        val dateKey = data.dateKey ?: return GraphResult(null, "No date key detected; set a Date key override in Settings if needed.")
-        if (key == dateKey) return GraphResult(null, "The date key is the time axis; a distribution box plot is not meaningful for the date values themselves.")
+    private fun effectiveJsonFile(data: TableData): JSONObject {
+        val rows = JSONArray().apply {
+            data.rows.forEach { row ->
+                put(runCatching { JSONObject(row.originalJson) }.getOrElse {
+                    JSONObject().apply { row.values.forEach { (key, value) -> put(key, value) } }
+                })
+            }
+        }
+        return JSONObject().apply {
+            put("name", selectedPath?.substringAfterLast('/') ?: "current.json")
+            put("content", rows.toString())
+        }
+    }
 
-        val datedNumeric = data.rows.mapNotNull { row ->
-            val x = Statistics.parseDate(row.values[dateKey].orEmpty()) ?: return@mapNotNull null
-            val y = Statistics.parseNumber(row.values[key].orEmpty()) ?: return@mapNotNull null
-            x to y
+    private fun datedNumericPayload(data: TableData, key: String): Triple<JSONArray, Int, Int> {
+        val dateKey = data.dateKey ?: return Triple(JSONArray(), data.rows.size, 0)
+        var missingDates = 0
+        var nonNumeric = 0
+        val values = data.rows.mapNotNull { row ->
+            val rawDate = row.values[dateKey].orEmpty()
+            val x = Statistics.parseDate(rawDate)
+            if (x == null) { missingDates += 1; return@mapNotNull null }
+            val y = Statistics.parseNumber(row.values[key].orEmpty())
+            if (y == null) { nonNumeric += 1; return@mapNotNull null }
+            Triple(x, y, rawDate)
         }.sortedBy { it.first }
+        return Triple(JSONArray().apply {
+            values.forEach { (x, y, label) -> put(JSONObject().apply { put("x", x); put("y", y); put("label", label) }) }
+        }, missingDates, nonNumeric)
+    }
 
-        if (datedNumeric.isEmpty()) {
-            return GraphResult(null, "Cumulative box timeline requires dated numeric values for this key.")
-        }
+    private fun webPlot(payload: JSONObject): WebPlotView = WebPlotView(this).apply { bind(plotRuntime, payload) }
 
-        val series = Statistics.cumulativeBoxSeries(datedNumeric)
-        val view = CumulativeBoxPlotView(this).apply {
-            setPalette(BLACK, MUTED, WHITE, SURFACE)
-            setSeries(series)
+    private fun buildGraph(data: TableData, key: String): WebPlotResult {
+        val dateKey = data.dateKey ?: return WebPlotResult(null, "No date key detected; set a Date key override in Settings if needed.")
+        if (key == dateKey) return WebPlotResult(null, "The date key is the time axis; a cumulative distribution plot is not meaningful for it.")
+        val (plotData, missingDates, nonNumeric) = datedNumericPayload(data, key)
+        if (plotData.length() == 0) return WebPlotResult(null, "Cumulative box timeline requires dated numeric values for this key.")
+        val payload = JSONObject().apply {
+            put("kind", "history")
+            put("data", plotData)
+            put("timeAxis", true)
+            put("height", 340)
+            put("theme", settings.plotTheme.toJson())
         }
-        val totalDated = data.rows.count { Statistics.parseDate(it.values[dateKey].orEmpty()) != null }
-        val missingDates = data.rows.size - totalDated
-        val nonNumericDated = totalDated - datedNumeric.size
         val omitted = buildList {
             if (missingDates > 0) add("$missingDates row(s) have missing/unparseable dates")
-            if (nonNumericDated > 0) add("$nonNumericDated dated row(s) are non-numeric for this key")
+            if (nonNumeric > 0) add("$nonNumeric dated row(s) are non-numeric")
         }.joinToString("; ")
-        val omissionText = if (omitted.isBlank()) "" else " Omitted: $omitted."
-        return GraphResult(
-            view,
-            "Timestamp totals: rows sharing an exact datetime are summed before statistics; ${datedNumeric.size} numeric row(s) became ${series.size} timestamp observation(s). Real gaps in dates are preserved. Q1–Q3 = solid box · green when current total > previous total, otherwise red · first box neutral · median = solid contrast line · mean = dotted contrast line · whiskers = mean ± 1σ and follow box color · tiny red hollow ○ = Tukey outlier · blue ◆ = total at that datetime · translucent blue path = timestamp totals.$omissionText Tap a box to inspect; pinch to zoom; drag to pan; double-tap to reset.",
+        return WebPlotResult(
+            webPlot(payload),
+            "D3.js cumulative timestamp box plot. Identical datetimes are summed first; sparse/missing dates remain real gaps. Q1–Q3 is the solid box, median is solid, mean is dotted, whiskers are mean ± 1σ, tiny hollow red circles are Tukey outliers, and the blue rhombus/path is the timestamp total.${if (omitted.isBlank()) "" else " Omitted: $omitted."} Pinch/drag to inspect and double-tap to reset.",
         )
     }
 
-    private data class SimplePlotResult(val view: InteractiveLinePlotView?, val legend: String?)
-
-    private fun buildAccumulationPlot(data: TableData, key: String): SimplePlotResult {
-        val dateKey = data.dateKey ?: return SimplePlotResult(null, "No date key detected for cumulative timeline.")
-        val dated = data.rows.mapNotNull { row ->
-            val x = Statistics.parseDate(row.values[dateKey].orEmpty()) ?: return@mapNotNull null
-            val y = Statistics.parseNumber(row.values[key].orEmpty()) ?: return@mapNotNull null
-            x to y
+    private fun buildAccumulationPlot(data: TableData, key: String): WebPlotResult {
+        if (data.dateKey == null) return WebPlotResult(null, "No date key detected for cumulative timeline.")
+        val (plotData, _, _) = datedNumericPayload(data, key)
+        if (plotData.length() == 0) return WebPlotResult(null, "No dated numeric $key values in the current dataset.")
+        val payload = JSONObject().apply {
+            put("kind", "accumulation")
+            put("data", plotData)
+            put("timeAxis", true)
+            put("height", 230)
+            put("theme", settings.plotTheme.toJson())
         }
-        if (dated.isEmpty()) return SimplePlotResult(null, "No dated numeric $key values in the current dataset.")
-        val series = Statistics.cumulativeTotalSeries(dated)
-        val view = InteractiveLinePlotView(this).apply {
-            setPalette(BLACK, MUTED, WHITE, SURFACE, Color.rgb(61, 139, 255))
-            setSeries(series.map { it.first.toDouble() to it.second }, InteractiveLinePlotView.AxisKind.TIME)
-        }
-        return SimplePlotResult(view, "Running sum of timestamp-level $key totals. Filtering changes this plot. Pinch to zoom, drag to pan, double-tap to reset.")
+        return WebPlotResult(webPlot(payload), "Observable Plot running sum of timestamp-level $key totals. Filtering changes this plot. Pinch/drag to inspect and double-tap to reset.")
     }
 
-    private fun buildNormalPlot(data: TableData, key: String): SimplePlotResult {
+    private fun buildNormalPlot(data: TableData, key: String): WebPlotResult {
         val values = data.rows.mapNotNull { Statistics.parseNumber(it.values[key].orEmpty()) }
-        if (values.isEmpty()) return SimplePlotResult(null, "No numeric $key values in the current dataset.")
-        val curve = Statistics.normalDistribution(values)
-        val view = InteractiveLinePlotView(this).apply {
-            setPalette(BLACK, MUTED, WHITE, SURFACE, STAT_QUARTILE)
-            setSeries(curve, InteractiveLinePlotView.AxisKind.NUMBER, rugSamples = values)
+        if (values.isEmpty()) return WebPlotResult(null, "No numeric $key values in the current dataset.")
+        val payload = JSONObject().apply {
+            put("kind", "normal")
+            put("values", JSONArray(values))
+            put("height", 230)
+            put("theme", settings.plotTheme.toJson())
         }
-        val note = if (values.distinct().size <= 1) " All values are identical, so σ = 0 and the fitted distribution collapses to one point." else ""
-        return SimplePlotResult(view, "Fitted normal PDF from the current $key subset; bottom ticks show observed values.$note Pinch to zoom, drag to pan, double-tap to reset.")
+        val note = if (values.distinct().size <= 1) " All values are identical, so the fitted distribution collapses around one point." else ""
+        return WebPlotResult(webPlot(payload), "Observable Plot fitted normal PDF; bottom ticks show the visible observations.$note Pinch/drag to inspect and double-tap to reset.")
+    }
+
+    private fun setPlotViewsActive(view: View, active: Boolean, ancestorVisible: Boolean = true) {
+        val visible = ancestorVisible && view.visibility == View.VISIBLE
+        if (view is WebPlotView) view.setPlotActive(active && visible)
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) setPlotViewsActive(view.getChildAt(index), active, visible)
+        }
     }
 
     private fun accordion(
@@ -1949,11 +2072,16 @@ class MainActivity : Activity() {
         val wrapper = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            visibility = if (initiallyOpen) View.VISIBLE else View.GONE
+            visibility = View.GONE
             setPadding(dp(10), dp(7), dp(10), dp(10))
             setBackgroundColor(BLACK)
         }
-        build(content)
+        var built = false
+        fun ensureBuilt() {
+            if (built) return
+            built = true
+            build(content)
+        }
         val header = TextView(this).apply {
             text = if (initiallyOpen) "− $title" else "+ $title"
             textSize = 16f
@@ -1964,7 +2092,14 @@ class MainActivity : Activity() {
             AppFonts.apply(this, bold = true)
             setOnClickListener {
                 val opening = content.visibility != View.VISIBLE
-                content.visibility = if (opening) View.VISIBLE else View.GONE
+                if (opening) {
+                    ensureBuilt()
+                    content.visibility = View.VISIBLE
+                    setPlotViewsActive(content, true)
+                } else {
+                    setPlotViewsActive(content, false)
+                    content.visibility = View.GONE
+                }
                 text = if (opening) "− $title" else "+ $title"
                 setTextColor(if (opening) PRIMARY else WHITE)
                 background = if (opening) activeButtonBackground(PRIMARY) else noBorderBackground()
@@ -1973,6 +2108,10 @@ class MainActivity : Activity() {
         tooltip?.let { description -> tooltipController.attachHold(header, { description }) }
         wrapper.addView(header, matchWidth())
         wrapper.addView(content, matchWidth())
+        if (initiallyOpen) {
+            ensureBuilt()
+            content.visibility = View.VISIBLE
+        }
         return wrapper
     }
 

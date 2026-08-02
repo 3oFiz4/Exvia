@@ -40,6 +40,21 @@ class SettingsStore(context: Context) {
             quinary = prefs.getString(KEY_QUINARY, defaults.quinary) ?: defaults.quinary,
             senary = prefs.getString(KEY_SENARY, defaults.senary) ?: defaults.senary,
         )
+        val plotDefaults = PlotTheme.default()
+        val plotTheme = PlotTheme(
+            background = prefs.getString(KEY_PLOT_BACKGROUND, plotDefaults.background) ?: plotDefaults.background,
+            surface = prefs.getString(KEY_PLOT_SURFACE, plotDefaults.surface) ?: plotDefaults.surface,
+            text = prefs.getString(KEY_PLOT_TEXT, plotDefaults.text) ?: plotDefaults.text,
+            muted = prefs.getString(KEY_PLOT_MUTED, plotDefaults.muted) ?: plotDefaults.muted,
+            grid = prefs.getString(KEY_PLOT_GRID, plotDefaults.grid) ?: plotDefaults.grid,
+            axis = prefs.getString(KEY_PLOT_AXIS, plotDefaults.axis) ?: plotDefaults.axis,
+            positive = prefs.getString(KEY_PLOT_POSITIVE, plotDefaults.positive) ?: plotDefaults.positive,
+            negative = prefs.getString(KEY_PLOT_NEGATIVE, plotDefaults.negative) ?: plotDefaults.negative,
+            observation = prefs.getString(KEY_PLOT_OBSERVATION, plotDefaults.observation) ?: plotDefaults.observation,
+            outlier = prefs.getString(KEY_PLOT_OUTLIER, plotDefaults.outlier) ?: plotDefaults.outlier,
+            center = prefs.getString(KEY_PLOT_CENTER, plotDefaults.center) ?: plotDefaults.center,
+            accent = prefs.getString(KEY_PLOT_ACCENT, plotDefaults.accent) ?: plotDefaults.accent,
+        )
         return RepoSettings(
             owner = prefs.getString(KEY_OWNER, RepoConfig.OWNER) ?: RepoConfig.OWNER,
             repo = prefs.getString(KEY_REPO, RepoConfig.REPO) ?: RepoConfig.REPO,
@@ -58,11 +73,12 @@ class SettingsStore(context: Context) {
             financeColumns = parseColumnList(prefs.getString(KEY_FINANCE_COLUMNS, "price") ?: "price"),
             customMetrics = parseCustomMetrics(prefs.getString(KEY_CUSTOM_METRICS, "[]") ?: "[]"),
             customPlots = parseCustomPlots(prefs.getString(KEY_CUSTOM_PLOTS, "[]") ?: "[]"),
-            reportRepo = prefs.getString(KEY_REPORT_REPO, "Exvia") ?: "Exvia",
+            reportRepo = prefs.getString(KEY_REPORT_REPO, "finance_app") ?: "finance_app",
             uiScale = prefs.getString(KEY_UI_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.60) ?: 1.0,
             textScale = prefs.getString(KEY_TEXT_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.80) ?: 1.0,
             themePreset = preset,
             palette = palette,
+            plotTheme = plotTheme,
         )
     }
 
@@ -83,7 +99,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_FINANCE_COLUMNS, settings.financeColumns.joinToString(", "))
             .putString(KEY_CUSTOM_METRICS, customMetricsToJson(settings.customMetrics))
             .putString(KEY_CUSTOM_PLOTS, customPlotsToJson(settings.customPlots))
-            .putString(KEY_REPORT_REPO, settings.reportRepo.trim().ifBlank { "Exvia" })
+            .putString(KEY_REPORT_REPO, settings.reportRepo.trim().ifBlank { "finance_app" })
             .putString(KEY_UI_SCALE, settings.uiScale.toString())
             .putString(KEY_TEXT_SCALE, settings.textScale.toString())
             .putString(KEY_THEME_PRESET, settings.themePreset.id)
@@ -93,6 +109,18 @@ class SettingsStore(context: Context) {
             .putString(KEY_QUATERNARY, settings.palette.quaternary)
             .putString(KEY_QUINARY, settings.palette.quinary)
             .putString(KEY_SENARY, settings.palette.senary)
+            .putString(KEY_PLOT_BACKGROUND, settings.plotTheme.background)
+            .putString(KEY_PLOT_SURFACE, settings.plotTheme.surface)
+            .putString(KEY_PLOT_TEXT, settings.plotTheme.text)
+            .putString(KEY_PLOT_MUTED, settings.plotTheme.muted)
+            .putString(KEY_PLOT_GRID, settings.plotTheme.grid)
+            .putString(KEY_PLOT_AXIS, settings.plotTheme.axis)
+            .putString(KEY_PLOT_POSITIVE, settings.plotTheme.positive)
+            .putString(KEY_PLOT_NEGATIVE, settings.plotTheme.negative)
+            .putString(KEY_PLOT_OBSERVATION, settings.plotTheme.observation)
+            .putString(KEY_PLOT_OUTLIER, settings.plotTheme.outlier)
+            .putString(KEY_PLOT_CENTER, settings.plotTheme.center)
+            .putString(KEY_PLOT_ACCENT, settings.plotTheme.accent)
             .apply()
     }
 
@@ -137,6 +165,18 @@ class SettingsStore(context: Context) {
         private const val KEY_QUATERNARY = "theme_quaternary"
         private const val KEY_QUINARY = "theme_quinary"
         private const val KEY_SENARY = "theme_senary"
+        private const val KEY_PLOT_BACKGROUND = "plot_theme_background"
+        private const val KEY_PLOT_SURFACE = "plot_theme_surface"
+        private const val KEY_PLOT_TEXT = "plot_theme_text"
+        private const val KEY_PLOT_MUTED = "plot_theme_muted"
+        private const val KEY_PLOT_GRID = "plot_theme_grid"
+        private const val KEY_PLOT_AXIS = "plot_theme_axis"
+        private const val KEY_PLOT_POSITIVE = "plot_theme_positive"
+        private const val KEY_PLOT_NEGATIVE = "plot_theme_negative"
+        private const val KEY_PLOT_OBSERVATION = "plot_theme_observation"
+        private const val KEY_PLOT_OUTLIER = "plot_theme_outlier"
+        private const val KEY_PLOT_CENTER = "plot_theme_center"
+        private const val KEY_PLOT_ACCENT = "plot_theme_accent"
 
         fun parseTickerColors(text: String): Map<String, String> {
             val result = linkedMapOf<String, String>()
@@ -193,6 +233,20 @@ class SettingsStore(context: Context) {
                 put("quinary", settings.palette.quinary)
                 put("senary", settings.palette.senary)
             })
+            put("plotTheme", JSONObject().apply {
+                put("background", settings.plotTheme.background)
+                put("surface", settings.plotTheme.surface)
+                put("text", settings.plotTheme.text)
+                put("muted", settings.plotTheme.muted)
+                put("grid", settings.plotTheme.grid)
+                put("axis", settings.plotTheme.axis)
+                put("positive", settings.plotTheme.positive)
+                put("negative", settings.plotTheme.negative)
+                put("observation", settings.plotTheme.observation)
+                put("outlier", settings.plotTheme.outlier)
+                put("center", settings.plotTheme.center)
+                put("accent", settings.plotTheme.accent)
+            })
             put("customMetrics", JSONArray(customMetricsToJson(settings.customMetrics)))
             put("customPlots", JSONArray(customPlotsToJson(settings.customPlots)))
             put("filterSnippets", JSONArray(filterSnippetsToJson(filterSnippets)))
@@ -229,14 +283,22 @@ class SettingsStore(context: Context) {
             (0 until arr.length()).mapNotNull { i ->
                 val obj = arr.optJSONObject(i) ?: return@mapNotNull null
                 val name = obj.optString("name").trim()
-                val xSource = obj.optString("xSource").trim()
-                val ySource = obj.optString("ySource").trim()
-                if (name.isBlank() || xSource.isBlank() || ySource.isBlank()) return@mapNotNull null
+                var script = obj.optString("script")
+                val engine = obj.optString("engine", "auto").ifBlank { "auto" }
+                // Migration from Exvia <= 1.11 axis-source custom plots.
+                if (script.isBlank()) {
+                    val xSource = obj.optString("xSource").trim()
+                    val ySource = obj.optString("ySource").trim()
+                    if (xSource.isNotBlank() && ySource.isNotBlank()) {
+                        script = legacyAxisPlotScript(xSource, ySource)
+                    }
+                }
+                if (name.isBlank() || script.isBlank()) return@mapNotNull null
                 CustomPlotDefinition(
                     id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
                     name = name,
-                    xSource = xSource,
-                    ySource = ySource,
+                    script = script,
+                    engine = engine,
                     enabled = obj.optBoolean("enabled", true),
                 )
             }
@@ -246,11 +308,32 @@ class SettingsStore(context: Context) {
             items.forEach { item -> put(JSONObject().apply {
                 put("id", item.id)
                 put("name", item.name)
-                put("xSource", item.xSource)
-                put("ySource", item.ySource)
+                put("script", item.script)
+                put("engine", item.engine)
                 put("enabled", item.enabled)
             }) }
         }.toString()
+
+        private fun legacyAxisPlotScript(xSource: String, ySource: String): String = """
+            const rows = JSON.parse(jsonFile.content);
+            const xKey = ${JSONObject.quote(xSource.substringAfter(':'))};
+            const yKey = ${JSONObject.quote(ySource.substringAfter(':'))};
+            const clean = rows.map((row, index) => ({
+              x: row[xKey] ?? index,
+              y: helpers.number(row[yKey])
+            })).filter(d => Number.isFinite(d.y));
+            const chart = Plot.plot({
+              width: context.width,
+              height: context.height,
+              style: helpers.plotStyle(theme),
+              x: {grid: true}, y: {grid: true},
+              marks: [
+                Plot.line(clean, {x: "x", y: "y", stroke: theme.observation}),
+                Plot.dot(clean, {x: "x", y: "y", fill: theme.observation, r: 3, tip: true})
+              ]
+            });
+            return chart;
+        """.trimIndent()
 
         private fun parseFilterSnippets(text: String): List<FilterSnippet> = try {
             val arr = JSONArray(text)
