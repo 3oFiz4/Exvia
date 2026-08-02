@@ -46,7 +46,7 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 10. Distinguishable logo and name
 11. Beautiful font family
 12. Explanation for each input and text, hold for 3 seconds to show tooltip
-13. Developer Options
+13. Developer Options (click 3x to the Title "Exvia" on Table to toggle)
 
 # Incoming Features
 1. Minimal, Lightweight, and yet Accurate voice recognition model that can be triggered by saying the word "Fin", and will listen for any word uttered by the user, and amending what is spoken to the database at a time
