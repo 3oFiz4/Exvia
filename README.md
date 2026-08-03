@@ -1,4 +1,4 @@
-# Exvia v26.8.2.3
+# Exvia v26.8.4
 <img width="236" height="236" alt="logo" src="https://github.com/user-attachments/assets/049d1e07-5866-4c51-bcb8-d0a83479a0b1" />
 
 *Exvia*, originates from Latin, *ex* means Out, and *via* means track, where it signify the act of tracking and monitoring every out (expenses) of your finance.
@@ -50,6 +50,7 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 14. Extended customization of plot, uses D3.JS (for complex plot) and ObservablePlot (for simpler plot), you can make your own!
 15. Report button, so you do not have create Issue on GitHub anymore :).
 16. Resizeable UI and Text
+17. Pagination within Table 
 
 # Incoming Features
 1. Minimal, Lightweight, and yet Accurate voice recognition model that can be triggered by saying the word "Fin", and will listen for any word uttered by the user, and amending what is spoken to the database at a time
