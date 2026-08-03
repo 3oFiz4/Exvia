@@ -50,7 +50,10 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 14. Extended customization of plot, uses D3.JS (for complex plot) and ObservablePlot (for simpler plot), you can make your own!
 15. Report button, so you do not have create Issue on GitHub anymore :).
 16. Resizeable UI and Text
-17. Pagination within Table 
+17. Pagination within Table
+
+# Usage
+Mostly you'll get the intuition of how to use the app by yourself. 
 
 # Incoming Features
 1. Minimal, Lightweight, and yet Accurate voice recognition model that can be triggered by saying the word "Fin", and will listen for any word uttered by the user, and amending what is spoken to the database at a time
