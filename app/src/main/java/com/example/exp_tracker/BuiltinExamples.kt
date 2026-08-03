@@ -22,6 +22,36 @@ object BuiltinExamples {
             name = "Food-like descriptions",
             query = "SELECT * WHERE REGEXP(description, '(?i)food|lunch|dinner|restaurant|meal')",
         ),
+        FilterSnippet(
+            id = "example_date_august",
+            name = "Dates in August 2026",
+            query = "SELECT * WHERE REGEXP(date, '^[0-9]{1,2}/8/26(?:\\s*@.*)?$')",
+        ),
+        FilterSnippet(
+            id = "example_date_morning",
+            name = "Morning transactions",
+            query = "SELECT * WHERE REGEXP(date, '@\\s*(?:0[5-9]|1[01]):[0-5][0-9]$')",
+        ),
+        FilterSnippet(
+            id = "example_price_range",
+            name = "Price from 10 to 100",
+            query = "SELECT * WHERE price >= 10 AND price <= 100",
+        ),
+        FilterSnippet(
+            id = "example_description_transport",
+            name = "Transport-like descriptions",
+            query = "SELECT * WHERE REGEXP(description, '(?i)bus|train|taxi|fuel|petrol|transport|grab|gojek')",
+        ),
+        FilterSnippet(
+            id = "example_tags_food_cashless",
+            name = "Food or non-cash tags",
+            query = "SELECT * WHERE REGEXP(tags, '(?i)food|non_cash')",
+        ),
+        FilterSnippet(
+            id = "example_missing_description",
+            name = "Missing descriptions",
+            query = "SELECT * WHERE description IS NULL",
+        ),
     )
 
     /**
@@ -207,6 +237,160 @@ object BuiltinExamples {
                 return values.length ? values.reduce((a,b) => a+b, 0) / values.length : null;
             """.trimIndent(),
         ),
+
+        CustomMetricDefinition(
+            id = "example_metric_expense_gini",
+            name = "Example · Expense Gini Coefficient",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return null;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                if (!moneyKey) return 'No money-like key';
+                const values = rows.map(r => String(r[moneyKey] ?? '').trim())
+                  .filter(v => v && !v.startsWith('+'))
+                  .map(v => Math.abs(Number(v.replace(/,/g, ''))))
+                  .filter(Number.isFinite).sort((a,b) => a-b);
+                if (!values.length) return null;
+                const total = values.reduce((a,b) => a+b, 0);
+                if (!total) return 0;
+                const weighted = values.reduce((sum, value, index) => sum + (index + 1) * value, 0);
+                return (2 * weighted) / (values.length * total) - (values.length + 1) / values.length;
+            """.trimIndent(),
+        ),
+        CustomMetricDefinition(
+            id = "example_metric_daily_spend_p95",
+            name = "Example · 95th Percentile Daily Spend",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return null;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const dateKey = keys.find(k => ['date','datetime','timestamp','time','created_at','createdat'].includes(k.toLowerCase()));
+                if (!moneyKey || !dateKey) return 'Money/date key not found';
+                const totals = {};
+                for (const row of rows) {
+                  const raw = String(row[moneyKey] ?? '').trim();
+                  if (!raw || raw.startsWith('+')) continue;
+                  const amount = Math.abs(Number(raw.replace(/,/g, '')));
+                  const day = String(row[dateKey] ?? '').split('@')[0].trim();
+                  if (Number.isFinite(amount) && day) totals[day] = (totals[day] || 0) + amount;
+                }
+                const values = Object.values(totals).sort((a,b) => a-b);
+                if (!values.length) return null;
+                return values[Math.max(0, Math.ceil(values.length * 0.95) - 1)];
+            """.trimIndent(),
+        ),
+        CustomMetricDefinition(
+            id = "example_metric_expense_momentum",
+            name = "Example · 7-Day Expense Momentum",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return null;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const dateKey = keys.find(k => ['date','datetime','timestamp','time','created_at','createdat'].includes(k.toLowerCase()));
+                if (!moneyKey || !dateKey) return 'Money/date key not found';
+                const parseDay = value => {
+                  const m = String(value).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})/);
+                  return m ? Date.UTC(2000 + Number(m[3]), Number(m[2]) - 1, Number(m[1])) : null;
+                };
+                const daily = {};
+                for (const row of rows) {
+                  const raw = String(row[moneyKey] ?? '').trim();
+                  if (!raw || raw.startsWith('+')) continue;
+                  const amount = Math.abs(Number(raw.replace(/,/g, '')));
+                  const day = parseDay(row[dateKey]);
+                  if (Number.isFinite(amount) && day !== null) daily[day] = (daily[day] || 0) + amount;
+                }
+                const values = Object.entries(daily).sort((a,b) => Number(a[0]) - Number(b[0])).map(entry => entry[1]);
+                if (values.length < 14) return 'Need at least 14 active spending days';
+                const mean = xs => xs.reduce((a,b) => a+b, 0) / xs.length;
+                const current = mean(values.slice(-7));
+                const previous = mean(values.slice(-14, -7));
+                return previous ? (current - previous) / previous * 100 : null;
+            """.trimIndent(),
+        ),
+        CustomMetricDefinition(
+            id = "example_metric_late_night_ratio",
+            name = "Example · Late-Night Spending Ratio",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return null;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const dateKey = keys.find(k => ['date','datetime','timestamp','time','created_at','createdat'].includes(k.toLowerCase()));
+                if (!moneyKey || !dateKey) return 'Money/date key not found';
+                let total = 0, late = 0;
+                for (const row of rows) {
+                  const raw = String(row[moneyKey] ?? '').trim();
+                  if (!raw || raw.startsWith('+')) continue;
+                  const amount = Math.abs(Number(raw.replace(/,/g, '')));
+                  const match = String(row[dateKey] ?? '').match(/@\s*(\d{1,2}):/);
+                  if (!Number.isFinite(amount)) continue;
+                  total += amount;
+                  const hour = match ? Number(match[1]) : null;
+                  if (hour !== null && (hour >= 22 || hour < 5)) late += amount;
+                }
+                return total > 0 ? late / total * 100 : null;
+            """.trimIndent(),
+        ),
+        CustomMetricDefinition(
+            id = "example_metric_small_purchase_leakage",
+            name = "Example · Small-Purchase Leakage",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return null;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                if (!moneyKey) return 'No money-like key';
+                const values = rows.map(r => String(r[moneyKey] ?? '').trim())
+                  .filter(v => v && !v.startsWith('+'))
+                  .map(v => Math.abs(Number(v.replace(/,/g, ''))))
+                  .filter(Number.isFinite).sort((a,b) => a-b);
+                if (!values.length) return null;
+                const q1 = values[Math.max(0, Math.ceil(values.length * 0.25) - 1)];
+                const total = values.reduce((a,b) => a+b, 0);
+                const small = values.filter(v => v <= q1).reduce((a,b) => a+b, 0);
+                return total > 0 ? {threshold:q1, sharePercent:small / total * 100} : null;
+            """.trimIndent(),
+        ),
+        CustomMetricDefinition(
+            id = "example_metric_category_entropy",
+            name = "Example · Expense Category Entropy",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return null;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const categoryKey = keys.find(k => ['ticker','category','code','type'].includes(k.toLowerCase()));
+                if (!moneyKey || !categoryKey) return 'Money/category key not found';
+                const totals = {};
+                let total = 0;
+                for (const row of rows) {
+                  const raw = String(row[moneyKey] ?? '').trim();
+                  if (!raw || raw.startsWith('+')) continue;
+                  const amount = Math.abs(Number(raw.replace(/,/g, '')));
+                  if (!Number.isFinite(amount)) continue;
+                  const category = String(row[categoryKey] ?? 'Uncategorized') || 'Uncategorized';
+                  totals[category] = (totals[category] || 0) + amount;
+                  total += amount;
+                }
+                const values = Object.values(totals);
+                if (!total || values.length < 2) return 0;
+                const entropy = -values.reduce((sum, value) => {
+                  const p = value / total;
+                  return sum + p * Math.log(p);
+                }, 0);
+                return entropy / Math.log(values.length) * 100;
+            """.trimIndent(),
+        ),
     )
 
     /** Script templates run with d3, Plot, aq, jsonFile, context, theme, and helpers already initialized. */
@@ -332,6 +516,146 @@ object BuiltinExamples {
                 return svg.node();
             """.trimIndent(),
         ),
+        CustomPlotDefinition(
+            id = "example_plot_monthly_cashflow",
+            name = "Example · Observable monthly income vs expense",
+            engine = "observable",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const dateKey = keys.find(k => ['date','datetime','timestamp','time','created_at','createdat'].includes(k.toLowerCase()));
+                if (!moneyKey || !dateKey) throw new Error('Money/date key not found');
+                const prepared = rows.map(row => {
+                  const date = helpers.parseDate(row[dateKey]);
+                  const raw = String(row[moneyKey] ?? '').trim();
+                  const value = Math.abs(helpers.number(raw));
+                  if (!date || !Number.isFinite(value)) return null;
+                  return {month:d3.timeMonth(date), kind:raw.startsWith('+') ? 'Income' : 'Expense', value};
+                }).filter(Boolean);
+                const totals = aq.from(prepared).groupby('month','kind').rollup({value:d=>aq.op.sum(d.value)}).objects();
+                return Plot.plot({
+                  width:context.width,height:context.height,style:helpers.plotStyle(theme),
+                  color:{domain:['Income','Expense'],range:[theme.positive,theme.negative]},
+                  marks:[Plot.barY(totals,{x:'month',y:'value',fill:'kind',fx:'kind',tip:true}),Plot.ruleY([0])]
+                });
+            """.trimIndent(),
+        ),
+        CustomPlotDefinition(
+            id = "example_plot_rolling_average",
+            name = "Example · Observable rolling expense average",
+            engine = "observable",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const dateKey = keys.find(k => ['date','datetime','timestamp','time','created_at','createdat'].includes(k.toLowerCase()));
+                if (!moneyKey) throw new Error('No money-like key');
+                const points = rows.map((row,index) => {
+                  const raw = String(row[moneyKey] ?? '').trim();
+                  const value = raw.startsWith('+') ? NaN : Math.abs(helpers.number(raw));
+                  const date = dateKey ? helpers.parseDate(row[dateKey]) : index;
+                  return {x:date ?? index,value};
+                }).filter(d => Number.isFinite(d.value)).sort((a,b) => (a.x instanceof Date ? +a.x : a.x) - (b.x instanceof Date ? +b.x : b.x));
+                const windowSize = 7;
+                points.forEach((point,index) => {
+                  const sample = points.slice(Math.max(0,index-windowSize+1),index+1);
+                  point.average = d3.mean(sample,d=>d.value);
+                });
+                return Plot.plot({
+                  width:context.width,height:context.height,style:helpers.plotStyle(theme),grid:true,
+                  marks:[
+                    Plot.dot(points,{x:'x',y:'value',fill:theme.observation,r:2,tip:true}),
+                    Plot.line(points,{x:'x',y:'average',stroke:theme.accent,strokeWidth:2})
+                  ]
+                });
+            """.trimIndent(),
+        ),
+        CustomPlotDefinition(
+            id = "example_plot_expense_histogram",
+            name = "Example · Observable expense histogram",
+            engine = "observable",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                if (!moneyKey) throw new Error('No money-like key');
+                const values = rows.map(row => String(row[moneyKey] ?? '').trim())
+                  .filter(value => value && !value.startsWith('+'))
+                  .map(value => ({amount:Math.abs(Number(value.replace(/,/g,'')))}))
+                  .filter(d => Number.isFinite(d.amount));
+                return Plot.plot({
+                  width:context.width,height:context.height,style:helpers.plotStyle(theme),grid:true,
+                  marks:[
+                    Plot.rectY(values,Plot.binX({y:'count'},{x:'amount',fill:theme.accent,tip:true})),
+                    Plot.ruleY([0])
+                  ]
+                });
+            """.trimIndent(),
+        ),
+        CustomPlotDefinition(
+            id = "example_plot_category_treemap",
+            name = "Example · D3 category treemap",
+            engine = "d3",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                const categoryKey = keys.find(k => ['ticker','category','code','type'].includes(k.toLowerCase()));
+                if (!moneyKey || !categoryKey) throw new Error('Money/category key not found');
+                const totals = d3.rollups(rows,v=>d3.sum(v,row=>{
+                  const raw=String(row[moneyKey]??'').trim();
+                  return raw.startsWith('+') ? 0 : Math.abs(helpers.number(raw))||0;
+                }),row=>String(row[categoryKey]||'Other'));
+                const root=d3.hierarchy({children:totals.map(([name,value])=>({name,value}))}).sum(d=>d.value||0);
+                d3.treemap().size([context.width,context.height]).paddingInner(2)(root);
+                const svg=d3.create('svg').attr('viewBox',[0,0,context.width,context.height]).style('background',theme.background);
+                const color=d3.scaleOrdinal(d3.schemeTableau10);
+                const nodes=svg.selectAll('g').data(root.leaves()).join('g').attr('transform',d=>'translate('+d.x0+','+d.y0+')');
+                nodes.append('rect').attr('width',d=>Math.max(0,d.x1-d.x0)).attr('height',d=>Math.max(0,d.y1-d.y0))
+                  .attr('fill',(d,i)=>color(i)).attr('stroke',theme.background);
+                nodes.append('text').attr('x',5).attr('y',15).attr('fill',theme.text).style('font-size','10px').text(d=>d.data.name);
+                nodes.append('title').text(d=>d.data.name+': '+helpers.format(d.value));
+                return svg.node();
+            """.trimIndent(),
+        ),
+        CustomPlotDefinition(
+            id = "example_plot_expense_beeswarm",
+            name = "Example · D3 expense beeswarm",
+            engine = "d3",
+            enabled = false,
+            script = """
+                const rows = JSON.parse(jsonFile.content);
+                if (!rows.length) return;
+                const keys = Object.keys(rows[0]);
+                const moneyKey = keys.find(k => ['price','amount','cost','expense','value','total','money'].includes(k.toLowerCase()));
+                if (!moneyKey) throw new Error('No money-like key');
+                const values = rows.map((row,index)=>{
+                  const raw=String(row[moneyKey]??'').trim();
+                  return {index,value:raw.startsWith('+')?NaN:Math.abs(helpers.number(raw))};
+                }).filter(d=>Number.isFinite(d.value));
+                const margin={left:35,right:20,top:20,bottom:35};
+                const x=d3.scaleLinear().domain(d3.extent(values,d=>d.value)).nice().range([margin.left,context.width-margin.right]);
+                const center=context.height/2;
+                values.forEach(d=>{d.x=x(d.value);d.y=center;});
+                d3.forceSimulation(values).force('x',d3.forceX(d=>x(d.value)).strength(1))
+                  .force('y',d3.forceY(center).strength(.12)).force('collide',d3.forceCollide(4)).stop().tick(140);
+                const svg=d3.create('svg').attr('viewBox',[0,0,context.width,context.height]).style('background',theme.background);
+                svg.append('g').attr('transform','translate(0,'+(context.height-margin.bottom)+')').call(d3.axisBottom(x).ticks(6)).attr('color',theme.axis);
+                svg.selectAll('circle').data(values).join('circle').attr('cx',d=>d.x).attr('cy',d=>d.y).attr('r',3)
+                  .attr('fill',theme.observation).attr('fill-opacity',.75).append('title').text(d=>helpers.format(d.value));
+                return svg.node();
+            """.trimIndent(),
+        ),
+
     )
 
 }

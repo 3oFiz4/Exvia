@@ -48,6 +48,19 @@ data class CustomPlotDefinition(
     val enabled: Boolean = true,
 )
 
+
+data class NamedUiTheme(
+    val id: String,
+    val name: String,
+    val palette: ThemePalette,
+)
+
+data class NamedPlotTheme(
+    val id: String,
+    val name: String,
+    val theme: PlotTheme,
+)
+
 data class RepoSettings(
     val owner: String,
     val repo: String,
@@ -70,6 +83,10 @@ data class RepoSettings(
     val themePreset: ThemePreset,
     val palette: ThemePalette,
     val plotTheme: PlotTheme,
+    val customUiThemes: List<NamedUiTheme>,
+    val activeUiThemeId: String,
+    val customPlotThemes: List<NamedPlotTheme>,
+    val activePlotThemeId: String,
 ) {
     fun pathFor(fileName: String): String = listOf(
         folder.trim('/'),

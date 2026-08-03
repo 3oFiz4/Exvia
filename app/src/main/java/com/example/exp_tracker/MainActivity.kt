@@ -53,6 +53,7 @@ class MainActivity : Activity() {
     }
 
     private enum class Tab { TABLE, STAT, FILES }
+    private data class ThemeChoice(val id: String, val label: String)
 
     private val executor = Executors.newSingleThreadExecutor()
     private lateinit var tokenStore: TokenStore
@@ -115,6 +116,7 @@ class MainActivity : Activity() {
     private lateinit var tokenSetting: EditText
     private lateinit var tickerColorsSetting: EditText
     private lateinit var themeSpinner: Spinner
+    private lateinit var plotThemeSpinner: Spinner
     private lateinit var primarySetting: EditText
     private lateinit var secondarySetting: EditText
     private lateinit var tertiarySetting: EditText
@@ -146,6 +148,12 @@ class MainActivity : Activity() {
     private lateinit var customPlotList: LinearLayout
     private var customMetricsDraft = mutableListOf<CustomMetricDefinition>()
     private var customPlotsDraft = mutableListOf<CustomPlotDefinition>()
+    private var customUiThemesDraft = mutableListOf<NamedUiTheme>()
+    private var customPlotThemesDraft = mutableListOf<NamedPlotTheme>()
+    private var uiThemeChoices: List<ThemeChoice> = emptyList()
+    private var plotThemeChoices: List<ThemeChoice> = emptyList()
+    private var suppressUiThemeSelection = false
+    private var suppressPlotThemeSelection = false
     private var filterSnippets = mutableListOf<FilterSnippet>()
 
     private val formInputs = linkedMapOf<String, EditText>()
@@ -168,6 +176,8 @@ class MainActivity : Activity() {
         developerMode = settingsStore.developerModeEnabled()
         customMetricsDraft = settings.customMetrics.toMutableList()
         customPlotsDraft = settings.customPlots.toMutableList()
+        customUiThemesDraft = settings.customUiThemes.toMutableList()
+        customPlotThemesDraft = settings.customPlotThemes.toMutableList()
         filterSnippets = settingsStore.loadFilterSnippets().toMutableList()
         tooltipController = TooltipController(this, { PRIMARY }, { BLACK }, { WHITE })
         fileCache = ExviaFileCache(this)
@@ -574,19 +584,27 @@ class MainActivity : Activity() {
         val plotTooltipBorder = colorConfigField("Tooltip border", "plot.tooltip_border", settings.plotTheme.tooltipBorder, "Pinned graph-tooltip border color.")
         plotTooltipBorderSetting = plotTooltipBorder.input
 
-        themeSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, ThemePreset.entries.map { it.displayName })
-            backgroundTintList = inputTint()
-        }
-        var suppressThemeSelection = true
+        themeSpinner = Spinner(this).apply { backgroundTintList = inputTint() }
         themeSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (!suppressThemeSelection) applyThemeFields(ThemePreset.entries[position])
+                if (!suppressUiThemeSelection) {
+                    uiThemeChoices.getOrNull(position)?.let { applyUiThemeChoice(it.id) }
+                }
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
         }
-        themeSpinner.setSelection(ThemePreset.entries.indexOf(settings.themePreset).coerceAtLeast(0), false)
-        themeSpinner.post { suppressThemeSelection = false }
+        rebuildUiThemeSpinner(settings.activeUiThemeId)
+
+        plotThemeSpinner = Spinner(this).apply { backgroundTintList = inputTint() }
+        plotThemeSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (!suppressPlotThemeSelection) {
+                    plotThemeChoices.getOrNull(position)?.let { applyPlotThemeChoice(it.id) }
+                }
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        }
+        rebuildPlotThemeSpinner(settings.activePlotThemeId)
 
         if (developerMode) {
             body.addView(accordion("GitHub", initiallyOpen = true, tooltip = "Repository connection, report target, data folder, default file, and encrypted GitHub PAT.") { container ->
@@ -605,12 +623,20 @@ class MainActivity : Activity() {
             }, spacedMatchWidth(10))
         }
 
-        body.addView(accordion("Color", tooltip = "Theme preset and six configurable semantic palette colors.") { container ->
-            container.addView(infoText("Theme").apply {
+        body.addView(accordion("Color", tooltip = "Built-in and named custom UI themes, plus six configurable semantic palette colors.") { container ->
+            container.addView(infoText("UI theme").apply {
                 AppFonts.apply(this, bold = true, textScale = settings.textScale)
-                tooltipController.attachHold(this, { "Switch among Default, Ayu, Ayu-Light, and Default light. Individual colors remain editable." })
+                tooltipController.attachHold(this, { "Select a built-in theme or one of your named custom themes. Selecting a theme copies its colors into the editable fields below." })
             }, spacedMatchWidth(3))
-            container.addView(themeSpinner, spacedMatchWidth(8))
+            container.addView(themeSpinner, spacedMatchWidth(6))
+            val themeActions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            themeActions.addView(styledButton("Save current as theme").apply {
+                setOnClickListener { promptCreateUiTheme() }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(3) })
+            themeActions.addView(styledButton("Delete selected", accent = SECONDARY).apply {
+                setOnClickListener { deleteSelectedUiTheme() }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(3) })
+            container.addView(themeActions, spacedMatchWidth(8))
             listOf(primary.wrapper, secondary.wrapper, tertiary.wrapper, quaternary.wrapper, quinary.wrapper, senary.wrapper)
                 .forEach { container.addView(it, spacedMatchWidth(5)) }
         }, spacedMatchWidth(10))
@@ -619,16 +645,21 @@ class MainActivity : Activity() {
             listOf(uiScale.wrapper, textScale.wrapper).forEach { container.addView(it, spacedMatchWidth(5)) }
         }, spacedMatchWidth(10))
 
-        body.addView(accordion("Plotting", tooltip = "Colors used by the D3.js and Observable Plot runtime. Plot background defaults to black and is independent from the application palette.") { container ->
+        body.addView(accordion("Plotting", tooltip = "Built-in and named custom plot themes used by the D3.js and Observable Plot runtime.") { container ->
             container.addView(infoText("Engine: pre-warmed WebView · D3.js for statistical boxes · Observable Plot for accumulation/distribution · Arquero for table operations.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
-            val presets = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            presets.addView(styledButton("Black default").apply {
-                setOnClickListener { applyPlotThemeFields(PlotTheme.default()) }
+            container.addView(infoText("Plot theme").apply {
+                AppFonts.apply(this, bold = true, textScale = settings.textScale)
+                tooltipController.attachHold(this, { "Select Black, Ayu, or a named plot theme. Theme colors are copied into the editable plotting fields below." })
+            }, spacedMatchWidth(3))
+            container.addView(plotThemeSpinner, spacedMatchWidth(6))
+            val plotThemeActions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            plotThemeActions.addView(styledButton("Save current as theme").apply {
+                setOnClickListener { promptCreatePlotTheme() }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(3) })
-            presets.addView(styledButton("Ayu plot").apply {
-                setOnClickListener { applyPlotThemeFields(PlotTheme.ayu()) }
+            plotThemeActions.addView(styledButton("Delete selected", accent = SECONDARY).apply {
+                setOnClickListener { deleteSelectedPlotTheme() }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(3) })
-            container.addView(presets, spacedMatchWidth(6))
+            container.addView(plotThemeActions, spacedMatchWidth(8))
             listOf(
                 plotBackground.wrapper, plotSurface.wrapper, plotText.wrapper, plotMuted.wrapper,
                 plotGrid.wrapper, plotAxis.wrapper, plotPositive.wrapper, plotNegative.wrapper,
@@ -788,6 +819,178 @@ class MainActivity : Activity() {
         plotTooltipBorderSetting.setText(theme.tooltipBorder)
     }
 
+
+    private fun applyThemeFields(palette: ThemePalette) {
+        primarySetting.setText(palette.primary)
+        secondarySetting.setText(palette.secondary)
+        tertiarySetting.setText(palette.tertiary)
+        quaternarySetting.setText(palette.quaternary)
+        quinarySetting.setText(palette.quinary)
+        senarySetting.setText(palette.senary)
+    }
+
+    private fun currentUiPalette(): ThemePalette = ThemePalette(
+        primary = primarySetting.text.toString().trim(),
+        secondary = secondarySetting.text.toString().trim(),
+        tertiary = tertiarySetting.text.toString().trim(),
+        quaternary = quaternarySetting.text.toString().trim(),
+        quinary = quinarySetting.text.toString().trim(),
+        senary = senarySetting.text.toString().trim(),
+    )
+
+    private fun currentPlotTheme(): PlotTheme = PlotTheme(
+        background = plotBackgroundSetting.text.toString().trim(),
+        surface = plotSurfaceSetting.text.toString().trim(),
+        text = plotTextSetting.text.toString().trim(),
+        muted = plotMutedSetting.text.toString().trim(),
+        grid = plotGridSetting.text.toString().trim(),
+        axis = plotAxisSetting.text.toString().trim(),
+        positive = plotPositiveSetting.text.toString().trim(),
+        negative = plotNegativeSetting.text.toString().trim(),
+        observation = plotObservationSetting.text.toString().trim(),
+        outlier = plotOutlierSetting.text.toString().trim(),
+        center = plotCenterSetting.text.toString().trim(),
+        accent = plotAccentSetting.text.toString().trim(),
+        selection = plotSelectionSetting.text.toString().trim(),
+        tooltipBackground = plotTooltipBackgroundSetting.text.toString().trim(),
+        tooltipText = plotTooltipTextSetting.text.toString().trim(),
+        tooltipBorder = plotTooltipBorderSetting.text.toString().trim(),
+    )
+
+    private fun rebuildUiThemeSpinner(selectedId: String) {
+        uiThemeChoices = ThemePreset.entries.map { ThemeChoice("builtin:${it.id}", it.displayName) } +
+            customUiThemesDraft.map { ThemeChoice(it.id, "Custom · ${it.name}") }
+        suppressUiThemeSelection = true
+        themeSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            uiThemeChoices.map { it.label },
+        )
+        val index = uiThemeChoices.indexOfFirst { it.id == selectedId }.takeIf { it >= 0 } ?: 0
+        themeSpinner.setSelection(index, false)
+        themeSpinner.post { suppressUiThemeSelection = false }
+    }
+
+    private fun rebuildPlotThemeSpinner(selectedId: String) {
+        plotThemeChoices = listOf(
+            ThemeChoice("builtin:black", "Black default"),
+            ThemeChoice("builtin:ayu", "Ayu plot"),
+        ) + customPlotThemesDraft.map { ThemeChoice(it.id, "Custom · ${it.name}") }
+        suppressPlotThemeSelection = true
+        plotThemeSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            plotThemeChoices.map { it.label },
+        )
+        val index = plotThemeChoices.indexOfFirst { it.id == selectedId }.takeIf { it >= 0 } ?: 0
+        plotThemeSpinner.setSelection(index, false)
+        plotThemeSpinner.post { suppressPlotThemeSelection = false }
+    }
+
+    private fun applyUiThemeChoice(id: String) {
+        if (id.startsWith("builtin:")) {
+            applyThemeFields(ThemePreset.fromId(id.removePrefix("builtin:")))
+            return
+        }
+        customUiThemesDraft.firstOrNull { it.id == id }?.let { applyThemeFields(it.palette) }
+    }
+
+    private fun applyPlotThemeChoice(id: String) {
+        when (id) {
+            "builtin:black" -> applyPlotThemeFields(PlotTheme.default())
+            "builtin:ayu" -> applyPlotThemeFields(PlotTheme.ayu())
+            else -> customPlotThemesDraft.firstOrNull { it.id == id }?.let { applyPlotThemeFields(it.theme) }
+        }
+    }
+
+    private fun promptCreateUiTheme() {
+        val name = styledInput("Theme name")
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Save UI theme")
+            .setView(name)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                val clean = name.text.toString().trim()
+                if (clean.isBlank()) {
+                    Toast.makeText(this, "Theme name is required.", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                if (customUiThemesDraft.any { it.name.equals(clean, ignoreCase = true) }) {
+                    Toast.makeText(this, "A UI theme with that name already exists.", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val item = NamedUiTheme(UUID.randomUUID().toString(), clean, currentUiPalette())
+                customUiThemesDraft += item
+                rebuildUiThemeSpinner(item.id)
+                Toast.makeText(this, "UI theme '$clean' added. Save settings to persist it.", Toast.LENGTH_SHORT).show()
+            }
+            .create()
+        showDialog(dialog)
+    }
+
+    private fun promptCreatePlotTheme() {
+        val name = styledInput("Plot theme name")
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Save plot theme")
+            .setView(name)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                val clean = name.text.toString().trim()
+                if (clean.isBlank()) {
+                    Toast.makeText(this, "Theme name is required.", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                if (customPlotThemesDraft.any { it.name.equals(clean, ignoreCase = true) }) {
+                    Toast.makeText(this, "A plot theme with that name already exists.", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val item = NamedPlotTheme(UUID.randomUUID().toString(), clean, currentPlotTheme())
+                customPlotThemesDraft += item
+                rebuildPlotThemeSpinner(item.id)
+                Toast.makeText(this, "Plot theme '$clean' added. Save settings to persist it.", Toast.LENGTH_SHORT).show()
+            }
+            .create()
+        showDialog(dialog)
+    }
+
+    private fun deleteSelectedUiTheme() {
+        val selected = uiThemeChoices.getOrNull(themeSpinner.selectedItemPosition) ?: return
+        if (selected.id.startsWith("builtin:")) {
+            Toast.makeText(this, "Built-in themes cannot be removed.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val item = customUiThemesDraft.firstOrNull { it.id == selected.id } ?: return
+        AlertDialog.Builder(this)
+            .setTitle("Delete UI theme?")
+            .setMessage(item.name)
+            .setNegativeButton("No", null)
+            .setPositiveButton("Yes") { _, _ ->
+                customUiThemesDraft.removeAll { it.id == item.id }
+                rebuildUiThemeSpinner("builtin:${ThemePreset.DEFAULT.id}")
+                applyThemeFields(ThemePalette.preset(ThemePreset.DEFAULT))
+            }
+            .create().also { showDialog(it) }
+    }
+
+    private fun deleteSelectedPlotTheme() {
+        val selected = plotThemeChoices.getOrNull(plotThemeSpinner.selectedItemPosition) ?: return
+        if (selected.id.startsWith("builtin:")) {
+            Toast.makeText(this, "Built-in plot themes cannot be removed.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val item = customPlotThemesDraft.firstOrNull { it.id == selected.id } ?: return
+        AlertDialog.Builder(this)
+            .setTitle("Delete plot theme?")
+            .setMessage(item.name)
+            .setNegativeButton("No", null)
+            .setPositiveButton("Yes") { _, _ ->
+                customPlotThemesDraft.removeAll { it.id == item.id }
+                rebuildPlotThemeSpinner("builtin:black")
+                applyPlotThemeFields(PlotTheme.default())
+            }
+            .create().also { showDialog(it) }
+    }
+
     private fun renderCustomMetricSettings() {
         if (!::customMetricList.isInitialized) return
         customMetricList.removeAllViews()
@@ -869,7 +1072,7 @@ class MainActivity : Activity() {
         if (!::customPlotList.isInitialized) return
         customPlotList.removeAllViews()
         customPlotList.addView(accordion("Built-in plot examples", initiallyOpen = false) { examples ->
-            examples.addView(infoText("The first three templates use Observable Plot; the final two use D3.js directly. Arquero is available in every script.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+            examples.addView(infoText("Six templates use Observable Plot and four use D3.js directly. Arquero is available in every script.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
             BuiltinExamples.customPlots.forEach { example ->
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(1), 0, dp(1)) }
                 row.addView(infoText("${example.name}\n${example.engine}").apply { setTextColor(WHITE); textSize = 12f }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -1013,7 +1216,15 @@ return Plot.plot({
         }
         if (invalid) return
 
-        val selectedTheme = ThemePreset.entries.getOrElse(themeSpinner.selectedItemPosition) { ThemePreset.DEFAULT }
+        val activeUiThemeId = uiThemeChoices.getOrNull(themeSpinner.selectedItemPosition)?.id
+            ?: "builtin:${ThemePreset.DEFAULT.id}"
+        val activePlotThemeId = plotThemeChoices.getOrNull(plotThemeSpinner.selectedItemPosition)?.id
+            ?: "builtin:black"
+        val selectedTheme = if (activeUiThemeId.startsWith("builtin:")) {
+            ThemePreset.fromId(activeUiThemeId.removePrefix("builtin:"))
+        } else {
+            ThemePreset.DEFAULT
+        }
         val next = RepoSettings(
             owner = ownerSetting.text.toString().trim(),
             repo = repoSetting.text.toString().trim(),
@@ -1034,28 +1245,12 @@ return Plot.plot({
             uiScale = uiScale!!,
             textScale = textScale!!,
             themePreset = selectedTheme,
-            palette = ThemePalette(
-                primarySetting.text.toString().trim(), secondarySetting.text.toString().trim(), tertiarySetting.text.toString().trim(),
-                quaternarySetting.text.toString().trim(), quinarySetting.text.toString().trim(), senarySetting.text.toString().trim(),
-            ),
-            plotTheme = PlotTheme(
-                background = plotBackgroundSetting.text.toString().trim(),
-                surface = plotSurfaceSetting.text.toString().trim(),
-                text = plotTextSetting.text.toString().trim(),
-                muted = plotMutedSetting.text.toString().trim(),
-                grid = plotGridSetting.text.toString().trim(),
-                axis = plotAxisSetting.text.toString().trim(),
-                positive = plotPositiveSetting.text.toString().trim(),
-                negative = plotNegativeSetting.text.toString().trim(),
-                observation = plotObservationSetting.text.toString().trim(),
-                outlier = plotOutlierSetting.text.toString().trim(),
-                center = plotCenterSetting.text.toString().trim(),
-                accent = plotAccentSetting.text.toString().trim(),
-                selection = plotSelectionSetting.text.toString().trim(),
-                tooltipBackground = plotTooltipBackgroundSetting.text.toString().trim(),
-                tooltipText = plotTooltipTextSetting.text.toString().trim(),
-                tooltipBorder = plotTooltipBorderSetting.text.toString().trim(),
-            ),
+            palette = currentUiPalette(),
+            plotTheme = currentPlotTheme(),
+            customUiThemes = customUiThemesDraft.toList(),
+            activeUiThemeId = activeUiThemeId,
+            customPlotThemes = customPlotThemesDraft.toList(),
+            activePlotThemeId = activePlotThemeId,
         )
         settingsStore.save(next)
         val enteredToken = tokenSetting.text.toString().trim()

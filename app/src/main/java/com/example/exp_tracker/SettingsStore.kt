@@ -40,6 +40,8 @@ class SettingsStore(context: Context) {
             quinary = prefs.getString(KEY_QUINARY, defaults.quinary) ?: defaults.quinary,
             senary = prefs.getString(KEY_SENARY, defaults.senary) ?: defaults.senary,
         )
+        val customUiThemes = parseCustomUiThemes(prefs.getString(KEY_CUSTOM_UI_THEMES, "[]") ?: "[]")
+        val customPlotThemes = parseCustomPlotThemes(prefs.getString(KEY_CUSTOM_PLOT_THEMES, "[]") ?: "[]")
         val plotDefaults = PlotTheme.default()
         val plotTheme = PlotTheme(
             background = prefs.getString(KEY_PLOT_BACKGROUND, plotDefaults.background) ?: plotDefaults.background,
@@ -77,12 +79,16 @@ class SettingsStore(context: Context) {
             financeColumns = parseColumnList(prefs.getString(KEY_FINANCE_COLUMNS, "price") ?: "price"),
             customMetrics = parseCustomMetrics(prefs.getString(KEY_CUSTOM_METRICS, "[]") ?: "[]"),
             customPlots = parseCustomPlots(prefs.getString(KEY_CUSTOM_PLOTS, "[]") ?: "[]"),
-            reportRepo = prefs.getString(KEY_REPORT_REPO, "finance_app") ?: "finance_app",
+            reportRepo = prefs.getString(KEY_REPORT_REPO, "Exvia") ?: "Exvia",
             uiScale = prefs.getString(KEY_UI_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.60) ?: 1.0,
             textScale = prefs.getString(KEY_TEXT_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.80) ?: 1.0,
             themePreset = preset,
             palette = palette,
             plotTheme = plotTheme,
+            customUiThemes = customUiThemes,
+            activeUiThemeId = prefs.getString(KEY_ACTIVE_UI_THEME, "builtin:${preset.id}") ?: "builtin:${preset.id}",
+            customPlotThemes = customPlotThemes,
+            activePlotThemeId = prefs.getString(KEY_ACTIVE_PLOT_THEME, "builtin:black") ?: "builtin:black",
         )
     }
 
@@ -103,7 +109,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_FINANCE_COLUMNS, settings.financeColumns.joinToString(", "))
             .putString(KEY_CUSTOM_METRICS, customMetricsToJson(settings.customMetrics))
             .putString(KEY_CUSTOM_PLOTS, customPlotsToJson(settings.customPlots))
-            .putString(KEY_REPORT_REPO, settings.reportRepo.trim().ifBlank { "finance_app" })
+            .putString(KEY_REPORT_REPO, settings.reportRepo.trim().ifBlank { "Exvia" })
             .putString(KEY_UI_SCALE, settings.uiScale.toString())
             .putString(KEY_TEXT_SCALE, settings.textScale.toString())
             .putString(KEY_THEME_PRESET, settings.themePreset.id)
@@ -129,6 +135,10 @@ class SettingsStore(context: Context) {
             .putString(KEY_PLOT_TOOLTIP_BACKGROUND, settings.plotTheme.tooltipBackground)
             .putString(KEY_PLOT_TOOLTIP_TEXT, settings.plotTheme.tooltipText)
             .putString(KEY_PLOT_TOOLTIP_BORDER, settings.plotTheme.tooltipBorder)
+            .putString(KEY_CUSTOM_UI_THEMES, customUiThemesToJson(settings.customUiThemes))
+            .putString(KEY_ACTIVE_UI_THEME, settings.activeUiThemeId)
+            .putString(KEY_CUSTOM_PLOT_THEMES, customPlotThemesToJson(settings.customPlotThemes))
+            .putString(KEY_ACTIVE_PLOT_THEME, settings.activePlotThemeId)
             .apply()
     }
 
@@ -189,6 +199,10 @@ class SettingsStore(context: Context) {
         private const val KEY_PLOT_TOOLTIP_BACKGROUND = "plot_theme_tooltip_background"
         private const val KEY_PLOT_TOOLTIP_TEXT = "plot_theme_tooltip_text"
         private const val KEY_PLOT_TOOLTIP_BORDER = "plot_theme_tooltip_border"
+        private const val KEY_CUSTOM_UI_THEMES = "custom_ui_themes"
+        private const val KEY_ACTIVE_UI_THEME = "active_ui_theme"
+        private const val KEY_CUSTOM_PLOT_THEMES = "custom_plot_themes"
+        private const val KEY_ACTIVE_PLOT_THEME = "active_plot_theme"
 
         fun parseTickerColors(text: String): Map<String, String> {
             val result = linkedMapOf<String, String>()
@@ -238,14 +252,17 @@ class SettingsStore(context: Context) {
             })
             put("theme", JSONObject().apply {
                 put("preset", settings.themePreset.id)
+                put("activeThemeId", settings.activeUiThemeId)
                 put("primary", settings.palette.primary)
                 put("secondary", settings.palette.secondary)
                 put("tertiary", settings.palette.tertiary)
                 put("quaternary", settings.palette.quaternary)
                 put("quinary", settings.palette.quinary)
                 put("senary", settings.palette.senary)
+                put("customThemes", JSONArray(customUiThemesToJson(settings.customUiThemes)))
             })
             put("plotTheme", JSONObject().apply {
+                put("activeThemeId", settings.activePlotThemeId)
                 put("background", settings.plotTheme.background)
                 put("surface", settings.plotTheme.surface)
                 put("text", settings.plotTheme.text)
@@ -262,6 +279,7 @@ class SettingsStore(context: Context) {
                 put("tooltipBackground", settings.plotTheme.tooltipBackground)
                 put("tooltipText", settings.plotTheme.tooltipText)
                 put("tooltipBorder", settings.plotTheme.tooltipBorder)
+                put("customThemes", JSONArray(customPlotThemesToJson(settings.customPlotThemes)))
             })
             put("customMetrics", JSONArray(customMetricsToJson(settings.customMetrics)))
             put("customPlots", JSONArray(customPlotsToJson(settings.customPlots)))
@@ -270,6 +288,99 @@ class SettingsStore(context: Context) {
 
         fun parseColumnList(text: String): List<String> = text.split(',', '\n')
             .map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+
+        private fun parseCustomUiThemes(text: String): List<NamedUiTheme> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim()
+                val colors = obj.optJSONObject("palette") ?: return@mapNotNull null
+                val palette = ThemePalette(
+                    primary = colors.optString("primary", "#F72323"),
+                    secondary = colors.optString("secondary", "#CC0000"),
+                    tertiary = colors.optString("tertiary", "#000000"),
+                    quaternary = colors.optString("quaternary", "#1F1F1F"),
+                    quinary = colors.optString("quinary", "#7D7D7D"),
+                    senary = colors.optString("senary", "#EDEDED"),
+                )
+                if (name.isBlank() || listOf(
+                        palette.primary, palette.secondary, palette.tertiary,
+                        palette.quaternary, palette.quinary, palette.senary,
+                    ).any { !ThemePalette.isValidHex(it) }) return@mapNotNull null
+                NamedUiTheme(
+                    id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                    name = name,
+                    palette = palette,
+                )
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun customUiThemesToJson(items: List<NamedUiTheme>): String = JSONArray().apply {
+            items.forEach { item ->
+                put(JSONObject().apply {
+                    put("id", item.id)
+                    put("name", item.name)
+                    put("palette", JSONObject().apply {
+                        put("primary", item.palette.primary)
+                        put("secondary", item.palette.secondary)
+                        put("tertiary", item.palette.tertiary)
+                        put("quaternary", item.palette.quaternary)
+                        put("quinary", item.palette.quinary)
+                        put("senary", item.palette.senary)
+                    })
+                })
+            }
+        }.toString()
+
+        private fun parseCustomPlotThemes(text: String): List<NamedPlotTheme> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim()
+                val colors = obj.optJSONObject("theme") ?: return@mapNotNull null
+                val defaults = PlotTheme.default()
+                val theme = PlotTheme(
+                    background = colors.optString("background", defaults.background),
+                    surface = colors.optString("surface", defaults.surface),
+                    text = colors.optString("text", defaults.text),
+                    muted = colors.optString("muted", defaults.muted),
+                    grid = colors.optString("grid", defaults.grid),
+                    axis = colors.optString("axis", defaults.axis),
+                    positive = colors.optString("positive", defaults.positive),
+                    negative = colors.optString("negative", defaults.negative),
+                    observation = colors.optString("observation", defaults.observation),
+                    outlier = colors.optString("outlier", defaults.outlier),
+                    center = colors.optString("center", defaults.center),
+                    accent = colors.optString("accent", defaults.accent),
+                    selection = colors.optString("selection", defaults.selection),
+                    tooltipBackground = colors.optString("tooltipBackground", defaults.tooltipBackground),
+                    tooltipText = colors.optString("tooltipText", defaults.tooltipText),
+                    tooltipBorder = colors.optString("tooltipBorder", defaults.tooltipBorder),
+                )
+                val values = listOf(
+                    theme.background, theme.surface, theme.text, theme.muted, theme.grid, theme.axis,
+                    theme.positive, theme.negative, theme.observation, theme.outlier, theme.center,
+                    theme.accent, theme.selection, theme.tooltipBackground, theme.tooltipText,
+                    theme.tooltipBorder,
+                )
+                if (name.isBlank() || values.any { !PlotTheme.isValid(it) }) return@mapNotNull null
+                NamedPlotTheme(
+                    id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                    name = name,
+                    theme = theme,
+                )
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun customPlotThemesToJson(items: List<NamedPlotTheme>): String = JSONArray().apply {
+            items.forEach { item ->
+                put(JSONObject().apply {
+                    put("id", item.id)
+                    put("name", item.name)
+                    put("theme", item.theme.toJson())
+                })
+            }
+        }.toString()
 
         private fun parseCustomMetrics(text: String): List<CustomMetricDefinition> = try {
             val arr = JSONArray(text)
