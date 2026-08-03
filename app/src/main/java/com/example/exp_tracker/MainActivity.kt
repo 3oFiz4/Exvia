@@ -15,10 +15,13 @@ import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewConfiguration
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.Button
@@ -102,6 +105,11 @@ class MainActivity : Activity() {
     private lateinit var resyncButton: TextView
     private lateinit var titleText: TextView
     private lateinit var filteringMethodButton: TextView
+    private lateinit var previousPageButton: Button
+    private lateinit var nextPageButton: Button
+    private lateinit var pageIndicatorText: TextView
+    private lateinit var pageOverlayText: TextView
+    private var pageJumpInput: EditText? = null
 
     private lateinit var ownerSetting: EditText
     private lateinit var repoSetting: EditText
@@ -144,6 +152,7 @@ class MainActivity : Activity() {
     private lateinit var reportRepoSetting: EditText
     private lateinit var uiScaleSetting: EditText
     private lateinit var textScaleSetting: EditText
+    private lateinit var rowsPerPageSetting: EditText
     private lateinit var customMetricList: LinearLayout
     private lateinit var customPlotList: LinearLayout
     private var customMetricsDraft = mutableListOf<CustomMetricDefinition>()
@@ -167,6 +176,9 @@ class MainActivity : Activity() {
     private var developerMode = true
     private var titleTapCount = 0
     private var lastTitleTapAt = 0L
+    private var paginatedTableData = TableData(emptyList(), emptyList(), null, null, null, null)
+    private var currentPageIndex = 0
+    private var pageOverlayHideRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -423,7 +435,51 @@ class MainActivity : Activity() {
             setBackgroundColor(BLACK)
             addView(horizontal, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
-        addView(vertical, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        val tableFrame = FrameLayout(this@MainActivity).apply {
+            setBackgroundColor(BLACK)
+            addView(vertical, frameMatch())
+        }
+        pageOverlayText = TextView(this@MainActivity).apply {
+            visibility = View.GONE
+            gravity = Gravity.CENTER
+            setTextColor(WHITE)
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            background = activeButtonBackground(PRIMARY)
+            elevation = dp(6).toFloat()
+            AppFonts.apply(this, bold = true)
+        }
+        tableFrame.addView(pageOverlayText, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.CENTER,
+        ))
+        addView(tableFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val pagination = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(5), 0, 0)
+        }
+        previousPageButton = styledButton("Previous").apply {
+            setOnClickListener { changeTablePage(-1) }
+        }
+        pageIndicatorText = TextView(this@MainActivity).apply {
+            gravity = Gravity.CENTER
+            setTextColor(MUTED)
+            setPadding(dp(4), 0, dp(4), 0)
+            isClickable = true
+            isFocusable = true
+            background = inactiveActionBackground(PRIMARY)
+            setOnClickListener { beginPageJump() }
+            AppFonts.apply(this, bold = true)
+        }
+        nextPageButton = styledButton("Next").apply {
+            setOnClickListener { changeTablePage(1) }
+        }
+        pagination.addView(previousPageButton, LinearLayout.LayoutParams(0, dp(34), 1f))
+        pagination.addView(pageIndicatorText, LinearLayout.LayoutParams(0, dp(34), 1f))
+        pagination.addView(nextPageButton, LinearLayout.LayoutParams(0, dp(34), 1f))
+        addView(pagination, matchWidth())
         renderTable(currentData)
     }
 
@@ -537,6 +593,8 @@ class MainActivity : Activity() {
         uiScaleSetting = uiScale.input.apply { inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL }
         val textScale = configField("Text size multiplier", "display.text_scale", settings.textScale.toString(), "Scales text independently from the rest of the UI. Recommended range: 0.70–1.80.")
         textScaleSetting = textScale.input.apply { inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL }
+        val rowsPerPage = configField("Rows per table page", "display.rows_per_page", settings.rowsPerPage.toString(), "Number of rows shown on one Table page. Allowed range: 1–500.")
+        rowsPerPageSetting = rowsPerPage.input.apply { inputType = InputType.TYPE_CLASS_NUMBER }
 
         val primary = colorConfigField("Primary", "theme.primary", settings.palette.primary, "Active/focused state and highest-priority outline.")
         primarySetting = primary.input
@@ -642,7 +700,7 @@ class MainActivity : Activity() {
         }, spacedMatchWidth(10))
 
         body.addView(accordion("Interface", tooltip = "Resize the full UI and text independently. Changes take effect after Save settings and reload.") { container ->
-            listOf(uiScale.wrapper, textScale.wrapper).forEach { container.addView(it, spacedMatchWidth(5)) }
+            listOf(uiScale.wrapper, textScale.wrapper, rowsPerPage.wrapper).forEach { container.addView(it, spacedMatchWidth(5)) }
         }, spacedMatchWidth(10))
 
         body.addView(accordion("Plotting", tooltip = "Built-in and named custom plot themes used by the D3.js and Observable Plot runtime.") { container ->
@@ -1206,12 +1264,17 @@ return Plot.plot({
         }
         val uiScale = uiScaleSetting.text.toString().trim().toDoubleOrNull()
         val textScale = textScaleSetting.text.toString().trim().toDoubleOrNull()
+        val rowsPerPage = rowsPerPageSetting.text.toString().trim().toIntOrNull()
         if (uiScale == null || uiScale !in 0.70..1.60) {
             uiScaleSetting.error = "Use a value from 0.70 to 1.60"
             invalid = true
         }
         if (textScale == null || textScale !in 0.70..1.80) {
             textScaleSetting.error = "Use a value from 0.70 to 1.80"
+            invalid = true
+        }
+        if (rowsPerPage == null || rowsPerPage !in 1..500) {
+            rowsPerPageSetting.error = "Use a whole number from 1 to 500"
             invalid = true
         }
         if (invalid) return
@@ -1244,6 +1307,7 @@ return Plot.plot({
             reportRepo = reportRepoSetting.text.toString().trim().ifBlank { "finance_app" },
             uiScale = uiScale!!,
             textScale = textScale!!,
+            rowsPerPage = rowsPerPage!!,
             themePreset = selectedTheme,
             palette = currentUiPalette(),
             plotTheme = currentPlotTheme(),
@@ -1881,30 +1945,175 @@ return Plot.plot({
         formInputs.forEach { (key, view) -> put(key, view.text.toString()) }
     }
 
-    private fun renderTable(data: TableData) {
+    private fun renderTable(data: TableData, resetPage: Boolean = true) {
+        paginatedTableData = data
+        if (resetPage) currentPageIndex = 0
+        renderCurrentTablePage()
+    }
+
+    private fun renderCurrentTablePage() {
+        if (!::table.isInitialized) return
         table.removeAllViews()
-        if (data.keys.isEmpty()) return
-        val header = TableRow(this).apply {
-            setBackgroundColor(BLACK)
-            data.keys.forEach { addView(cell(it.uppercase(), header = true)) }
-            addView(cell("", header = true))
-        }
-        addTableRow(header)
-        data.rows.forEach { row ->
-            val tr = TableRow(this).apply { setBackgroundColor(BLACK) }
-            data.keys.forEach { key ->
-                var textColor = WHITE
-                val value = row.values[key].orEmpty()
-                if (key == data.moneyKey) textColor = if (value.trim().startsWith("+")) GREEN else RED
-                if (key == data.tickerKey) textColor = tickerColor(value)
-                tr.addView(cell(value, textColor = textColor, onClick = { editRow(row) }))
+        val rowsPerPage = settings.rowsPerPage.coerceIn(1, 500)
+        val pageCount = maxOf(1, (paginatedTableData.rows.size + rowsPerPage - 1) / rowsPerPage)
+        currentPageIndex = currentPageIndex.coerceIn(0, pageCount - 1)
+
+        if (paginatedTableData.keys.isNotEmpty()) {
+            val header = TableRow(this).apply {
+                setBackgroundColor(BLACK)
+                paginatedTableData.keys.forEach { addView(cell(it.uppercase(), header = true)) }
+                addView(cell("", header = true))
             }
-            tr.addView(cell("×", textColor = PRIMARY, onClick = { confirmDeleteRow(row) }).apply {
-                gravity = Gravity.CENTER
-                AppFonts.apply(this, bold = true)
-            })
-            addTableRow(tr)
+            addTableRow(header)
+
+            val start = currentPageIndex * rowsPerPage
+            val end = minOf(start + rowsPerPage, paginatedTableData.rows.size)
+            paginatedTableData.rows.subList(start.coerceAtMost(end), end).forEach { row ->
+                val tr = TableRow(this).apply { setBackgroundColor(BLACK) }
+                paginatedTableData.keys.forEach { key ->
+                    var textColor = WHITE
+                    val value = row.values[key].orEmpty()
+                    if (key == paginatedTableData.moneyKey) textColor = if (value.trim().startsWith("+")) GREEN else RED
+                    if (key == paginatedTableData.tickerKey) textColor = tickerColor(value)
+                    tr.addView(cell(value, textColor = textColor, onClick = { editRow(row) }))
+                }
+                tr.addView(cell("×", textColor = PRIMARY, onClick = { confirmDeleteRow(row) }).apply {
+                    gravity = Gravity.CENTER
+                    AppFonts.apply(this, bold = true)
+                })
+                addTableRow(tr)
+            }
         }
+        updatePaginationControls(pageCount)
+    }
+
+    private fun tablePageCount(): Int {
+        val rowsPerPage = settings.rowsPerPage.coerceIn(1, 500)
+        return maxOf(1, (paginatedTableData.rows.size + rowsPerPage - 1) / rowsPerPage)
+    }
+
+    private fun beginPageJump() {
+        if (busy || pageJumpInput != null || !::pageIndicatorText.isInitialized) return
+        val parent = pageIndicatorText.parent as? ViewGroup ?: return
+        val index = parent.indexOfChild(pageIndicatorText)
+        if (index < 0) return
+
+        val pageCount = tablePageCount()
+        val originalParams = pageIndicatorText.layoutParams
+        val input = EditText(this).apply {
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_NUMBER
+            imeOptions = EditorInfo.IME_ACTION_GO
+            gravity = Gravity.CENTER
+            setText((currentPageIndex + 1).toString())
+            hint = "1–$pageCount"
+            setTextColor(WHITE)
+            setHintTextColor(MUTED)
+            setSelectAllOnFocus(true)
+            setPadding(dp(4), 0, dp(4), 0)
+            background = activeButtonBackground(PRIMARY)
+            AppFonts.apply(this, bold = true, textScale = settings.textScale)
+            setOnEditorActionListener { _, actionId, event ->
+                val enterReleased = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP
+                if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE || enterReleased) {
+                    submitPageJump(this)
+                    true
+                } else {
+                    false
+                }
+            }
+            setOnFocusChangeListener { _, hasFocus ->
+                if (!hasFocus && pageJumpInput === this) cancelPageJump()
+            }
+        }
+
+        pageJumpInput = input
+        parent.removeViewAt(index)
+        parent.addView(input, index, originalParams)
+        input.requestFocus()
+        input.selectAll()
+        input.post {
+            (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }
+    }
+
+    private fun submitPageJump(input: EditText) {
+        if (pageJumpInput !== input) return
+        val pageCount = tablePageCount()
+        val requestedPage = input.text.toString().trim().toIntOrNull()
+        if (requestedPage == null || requestedPage !in 1..pageCount) {
+            Toast.makeText(this, "Enter a page from 1 to $pageCount.", Toast.LENGTH_SHORT).show()
+            input.selectAll()
+            return
+        }
+
+        restorePageIndicator(input)
+        currentPageIndex = requestedPage - 1
+        renderCurrentTablePage()
+        showPageOverlay()
+    }
+
+    private fun cancelPageJump() {
+        val input = pageJumpInput ?: return
+        restorePageIndicator(input)
+        updatePaginationControls(tablePageCount())
+    }
+
+    private fun restorePageIndicator(input: EditText) {
+        val parent = input.parent as? ViewGroup
+        val index = parent?.indexOfChild(input) ?: -1
+        val params = input.layoutParams
+        pageJumpInput = null
+
+        (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+            ?.hideSoftInputFromWindow(input.windowToken, 0)
+
+        if (parent != null && index >= 0) {
+            parent.removeViewAt(index)
+            parent.addView(pageIndicatorText, index, params)
+        }
+    }
+
+    private fun changeTablePage(delta: Int) {
+        if (busy) return
+        val pageCount = tablePageCount()
+        val next = (currentPageIndex + delta).coerceIn(0, pageCount - 1)
+        if (next == currentPageIndex) return
+        currentPageIndex = next
+        renderCurrentTablePage()
+        showPageOverlay()
+    }
+
+    private fun updatePaginationControls(pageCount: Int) {
+        if (!::pageIndicatorText.isInitialized) return
+        val pageNumber = currentPageIndex + 1
+        pageIndicatorText.text = "Page $pageNumber / $pageCount"
+        previousPageButton.isEnabled = !busy && currentPageIndex > 0
+        nextPageButton.isEnabled = !busy && currentPageIndex < pageCount - 1
+        previousPageButton.alpha = if (previousPageButton.isEnabled) 1f else 0.38f
+        nextPageButton.alpha = if (nextPageButton.isEnabled) 1f else 0.38f
+    }
+
+    private fun showPageOverlay() {
+        if (!::pageOverlayText.isInitialized) return
+        pageOverlayHideRunnable?.let(uiHandler::removeCallbacks)
+        pageOverlayText.animate().cancel()
+        pageOverlayText.text = "Page ${currentPageIndex + 1}"
+        pageOverlayText.alpha = 1f
+        pageOverlayText.visibility = View.VISIBLE
+        val hide = Runnable {
+            pageOverlayText.animate()
+                .alpha(0f)
+                .setDuration(160L)
+                .withEndAction {
+                    pageOverlayText.visibility = View.GONE
+                    pageOverlayText.alpha = 1f
+                }
+                .start()
+        }
+        pageOverlayHideRunnable = hide
+        uiHandler.postDelayed(hide, 850L)
     }
 
     private fun editRow(row: DynamicRow) {
@@ -2247,7 +2456,7 @@ return Plot.plot({
         }.joinToString("; ")
         return WebPlotResult(
             webPlot(payload),
-            "Identical datetimes are summed first; sparse/missing dates remain real gaps\nQ1–Q3 is the solid box, median is solid, mean is dotted, whiskers are mean ± 1σ, tiny hollow red circles are Tukey outliers, and the blue rhombus/path is the timestamp total.${if (omitted.isBlank()) "" else " Omitted: $omitted."} Pinch/drag to inspect and double-tap to reset.",
+            "D3.js cumulative timestamp box plot. Identical datetimes are summed first; sparse/missing dates remain real gaps. Q1–Q3 is the solid box, median is solid, mean is dotted, whiskers are mean ± 1σ, tiny hollow red circles are Tukey outliers, and the blue rhombus/path is the timestamp total.${if (omitted.isBlank()) "" else " Omitted: $omitted."} Pinch/drag to inspect and double-tap to reset.",
         )
     }
 
@@ -2522,7 +2731,7 @@ return Plot.plot({
             setBackgroundColor(BLACK)
             setPadding(dp(8), 3, dp(8), 3)
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
-            AppFonts.apply(this, bold = header)
+            AppFonts.apply(this, bold = header, textScale = settings.textScale)
             if (onClick != null) setOnClickListener { if (!busy) onClick() }
         }
 
@@ -2586,6 +2795,8 @@ return Plot.plot({
             resyncButton.alpha = if (isBusy) 0.45f else 1f
         }
         formInputs.values.forEach { it.isEnabled = !isBusy }
+        if (isBusy && pageJumpInput != null) cancelPageJump()
+        if (::pageIndicatorText.isInitialized) updatePaginationControls(tablePageCount())
         if (message != null) statusText.text = message
     }
 

@@ -80,6 +80,7 @@ data class RepoSettings(
     val reportRepo: String,
     val uiScale: Double,
     val textScale: Double,
+    val rowsPerPage: Int,
     val themePreset: ThemePreset,
     val palette: ThemePalette,
     val plotTheme: PlotTheme,
