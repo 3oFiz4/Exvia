@@ -16,6 +16,30 @@ data class FilterSnippet(
     val query: String,
 )
 
+/**
+ * A table styling rule. [query] selects rows through the same SQLite-like WHERE
+ * evaluator used by Filtering. The three script fields accept either a plain
+ * value or assignment expressions such as:
+ *
+ * table['MATCHING_ROW'].back = "#ff0000aa"
+ * table['MATCHING_ROW']['PRICE'].fore = "#ffffff"
+ * table['MATCHING_ROW']['DESCRIPTION'].content = "Over budget: ${'$'}{DESCRIPTION}"
+ *
+ * The small assignment language is deliberately constrained: it may only
+ * change .back, .fore, and .content on the matching row or one matching cell.
+ */
+data class TableStyleRule(
+    val id: String,
+    val name: String,
+    val query: String,
+    val foregroundScript: String = "",
+    val backgroundScript: String = "",
+    val contentScript: String = "",
+    val enabled: Boolean = true,
+)
+
+enum class TableQueryMode { FILTERING, FLAGGING }
+
 data class CustomPlotDefinition(
     val id: String,
     val name: String,

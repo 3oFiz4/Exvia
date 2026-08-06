@@ -4,6 +4,7 @@ import xyz.x3ofiz4.exvia.domain.model.custom.CustomMetricDefinition
 import xyz.x3ofiz4.exvia.domain.model.custom.CustomPlotDefinition
 import xyz.x3ofiz4.exvia.domain.model.custom.NamedPlotTheme
 import xyz.x3ofiz4.exvia.domain.model.custom.NamedUiTheme
+import xyz.x3ofiz4.exvia.domain.model.custom.TableStyleRule
 import xyz.x3ofiz4.exvia.domain.model.theme.PlotTheme
 import xyz.x3ofiz4.exvia.domain.model.theme.ThemePalette
 import xyz.x3ofiz4.exvia.domain.model.theme.ThemePreset
@@ -19,7 +20,10 @@ data class RepoSettings(
     val moneyKeyOverride: String,
     val tickerKeyOverride: String,
     val tagsKeyOverride: String,
+    /** Legacy value-to-color map retained for migration from <= 1.13.2. */
     val tickerColors: Map<String, String>,
+    val flaggingRules: List<TableStyleRule>,
+    val colorMappings: List<TableStyleRule>,
     val plotColumns: List<String>,
     val financeColumns: List<String>,
     val customMetrics: List<CustomMetricDefinition>,

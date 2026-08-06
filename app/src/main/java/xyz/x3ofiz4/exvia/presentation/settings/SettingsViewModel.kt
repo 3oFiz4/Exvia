@@ -32,6 +32,25 @@ class SettingsViewModel(
     fun saveSnippets(snippets: List<FilterSnippet>) {
         repository.saveFilterSnippets(snippets)
         state.update { it.copy(snippets = snippets) }
+        val current = state.value
+        if (!current.hasToken || !current.settings.isConfigured()) return
+        launch("Synchronizing filtering snippets…", "Filtering snippets saved locally, but GitHub sync failed") {
+            repository.synchronizeConfiguration(current.settings, snippets, current.developerMode)
+            effects.emit(SettingsEffect.TableRulesSaved("Filtering snippets synchronized to .exvia/config.json."))
+        }
+    }
+
+    fun saveTableRules(next: RepoSettings) {
+        repository.saveTableRulesLocal(next)
+        state.update { it.copy(settings = next) }
+        if (!state.value.hasToken || !next.isConfigured()) {
+            effects.emit(SettingsEffect.TableRulesSaved("Table rules saved locally. GitHub sync needs a PAT and configured repository."))
+            return
+        }
+        launch("Synchronizing table rules…", "Table rules saved locally, but GitHub sync failed") {
+            repository.synchronizeTableRules(next)
+            effects.emit(SettingsEffect.TableRulesSaved("Table rules synchronized to .exvia/table-rules.json."))
+        }
     }
 
     fun saveSettings(next: RepoSettings, enteredToken: String?, snippets: List<FilterSnippet>, developerMode: Boolean) {
@@ -69,7 +88,7 @@ class SettingsViewModel(
         label: String,
         classification: String,
         developerMode: Boolean,
-    ) = launch("Creating issue in ${settings.owner}/${settings.reportRepo}…", "Report submission failed") {
+    ) = launch("Creating issue in ${settings.owner}/Exvia…", "Report submission failed") {
         val url = repository.submitReport(settings, title, description, label, classification, developerMode)
         effects.emit(SettingsEffect.ReportCreated(url))
     }

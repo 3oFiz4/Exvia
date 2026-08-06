@@ -19,4 +19,5 @@ sealed interface SettingsEffect {
     data class Reload(val message: String) : SettingsEffect
     data class ReportCreated(val url: String) : SettingsEffect
     data class RepositoryCreated(val settings: RepoSettings) : SettingsEffect
+    data class TableRulesSaved(val message: String) : SettingsEffect
 }

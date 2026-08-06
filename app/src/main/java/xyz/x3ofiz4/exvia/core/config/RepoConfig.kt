@@ -12,8 +12,11 @@ object RepoConfig {
     const val EXPENSE_FOLDER = "Financial"
     const val DEFAULT_JSON = "expenses.json"
     const val ARRAY_KEY = "expenses"
-    const val CONFIG_FILE_NAME = ".exvia-config.json"
-    const val CONFIG_PATH = "Financial/.exvia-config.json"
+    const val EXVIA_FOLDER = ".exvia"
+    const val CONFIG_FILE_NAME = "config.json"
+    const val CONFIG_PATH = ".exvia/config.json"
+    const val TABLE_RULES_FILE_NAME = "table-rules.json"
+    const val TABLE_RULES_PATH = ".exvia/table-rules.json"
 
     val TICKER_COLORS = mapOf(
         "FD" to "#FFB300",

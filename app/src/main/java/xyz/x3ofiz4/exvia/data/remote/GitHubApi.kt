@@ -28,8 +28,9 @@ class GitHubApi(
     private val settings: RepoSettings,
 ) {
     companion object {
-        const val CONFIG_FILE_NAME = ".exvia-config.json"
-        const val CONFIG_PATH = "Financial/.exvia-config.json"
+        const val CONFIG_FILE_NAME = "config.json"
+        const val CONFIG_PATH = ".exvia/config.json"
+        const val TABLE_RULES_PATH = ".exvia/table-rules.json"
     }
     private data class EditableDocument(val root: Any, val items: JSONArray)
 

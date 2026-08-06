@@ -70,6 +70,25 @@ class SettingsStore(context: Context) {
             tooltipText = prefs.getString(KEY_PLOT_TOOLTIP_TEXT, plotDefaults.tooltipText) ?: plotDefaults.tooltipText,
             tooltipBorder = prefs.getString(KEY_PLOT_TOOLTIP_BORDER, plotDefaults.tooltipBorder) ?: plotDefaults.tooltipBorder,
         )
+        val legacyTickerColors = parseTickerColors(
+            prefs.getString(KEY_TICKER_COLORS, null) ?: colorsToText(RepoConfig.TICKER_COLORS),
+        )
+        val initialMappings = BuiltinExamples.defaultColorMappings + legacyTickerColors.flatMap { (value, color) ->
+            listOf(
+                TableStyleRule(
+                    id = "legacy_ticker_${value.lowercase().replace(Regex("[^a-z0-9]+"), "_")}",
+                    name = "TICKER · $value",
+                    query = "SELECT * WHERE ticker = '${value.replace("'", "''")}'",
+                    foregroundScript = "table['MATCHING_ROW']['TICKER'].fore = \"$color\"",
+                ),
+                TableStyleRule(
+                    id = "legacy_category_${value.lowercase().replace(Regex("[^a-z0-9]+"), "_")}",
+                    name = "CATEGORY · $value",
+                    query = "SELECT * WHERE category = '${value.replace("'", "''")}'",
+                    foregroundScript = "table['MATCHING_ROW']['CATEGORY'].fore = \"$color\"",
+                ),
+            )
+        }
         return RepoSettings(
             owner = prefs.getString(KEY_OWNER, RepoConfig.OWNER) ?: RepoConfig.OWNER,
             repo = prefs.getString(KEY_REPO, RepoConfig.REPO) ?: RepoConfig.REPO,
@@ -81,14 +100,19 @@ class SettingsStore(context: Context) {
             moneyKeyOverride = prefs.getString(KEY_MONEY_KEY, "") ?: "",
             tickerKeyOverride = prefs.getString(KEY_TICKER_KEY, "") ?: "",
             tagsKeyOverride = prefs.getString(KEY_TAGS_KEY, "") ?: "",
-            tickerColors = parseTickerColors(
-                prefs.getString(KEY_TICKER_COLORS, null) ?: colorsToText(RepoConfig.TICKER_COLORS),
+            tickerColors = legacyTickerColors,
+            flaggingRules = parseTableStyleRules(
+                prefs.getString(KEY_FLAGGING_RULES, "[]") ?: "[]",
+            ),
+            colorMappings = parseTableStyleRules(
+                prefs.getString(KEY_COLOR_MAPPINGS, null)
+                    ?: tableStyleRulesToJson(initialMappings.distinctBy { it.id }),
             ),
             plotColumns = parseColumnList(prefs.getString(KEY_PLOT_COLUMNS, "price") ?: "price"),
             financeColumns = parseColumnList(prefs.getString(KEY_FINANCE_COLUMNS, "price") ?: "price"),
             customMetrics = parseCustomMetrics(prefs.getString(KEY_CUSTOM_METRICS, "[]") ?: "[]"),
             customPlots = parseCustomPlots(prefs.getString(KEY_CUSTOM_PLOTS, "[]") ?: "[]"),
-            reportRepo = prefs.getString(KEY_REPORT_REPO, "finance_app") ?: "finance_app",
+            reportRepo = "Exvia",
             uiScale = prefs.getString(KEY_UI_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.60) ?: 1.0,
             textScale = prefs.getString(KEY_TEXT_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.80) ?: 1.0,
             rowsPerPage = prefs.getString(KEY_ROWS_PER_PAGE, "25")?.toIntOrNull()?.coerceIn(1, 500) ?: 25,
@@ -115,11 +139,13 @@ class SettingsStore(context: Context) {
             .putString(KEY_TICKER_KEY, settings.tickerKeyOverride.trim())
             .putString(KEY_TAGS_KEY, settings.tagsKeyOverride.trim())
             .putString(KEY_TICKER_COLORS, colorsToText(settings.tickerColors))
+            .putString(KEY_FLAGGING_RULES, tableStyleRulesToJson(settings.flaggingRules))
+            .putString(KEY_COLOR_MAPPINGS, tableStyleRulesToJson(settings.colorMappings))
             .putString(KEY_PLOT_COLUMNS, settings.plotColumns.joinToString(", "))
             .putString(KEY_FINANCE_COLUMNS, settings.financeColumns.joinToString(", "))
             .putString(KEY_CUSTOM_METRICS, customMetricsToJson(settings.customMetrics))
             .putString(KEY_CUSTOM_PLOTS, customPlotsToJson(settings.customPlots))
-            .putString(KEY_REPORT_REPO, settings.reportRepo.trim().ifBlank { "finance_app" })
+            .putString(KEY_REPORT_REPO, "Exvia")
             .putString(KEY_UI_SCALE, settings.uiScale.toString())
             .putString(KEY_TEXT_SCALE, settings.textScale.toString())
             .putString(KEY_ROWS_PER_PAGE, settings.rowsPerPage.coerceIn(1, 500).toString())
@@ -181,6 +207,8 @@ class SettingsStore(context: Context) {
         private const val KEY_TICKER_KEY = "ticker_key"
         private const val KEY_TAGS_KEY = "tags_key"
         private const val KEY_TICKER_COLORS = "ticker_colors"
+        private const val KEY_FLAGGING_RULES = "flagging_rules"
+        private const val KEY_COLOR_MAPPINGS = "color_mappings"
         private const val KEY_PLOT_COLUMNS = "plot_columns"
         private const val KEY_FINANCE_COLUMNS = "finance_columns"
         private const val KEY_CUSTOM_METRICS = "custom_metrics"
@@ -242,7 +270,7 @@ class SettingsStore(context: Context) {
             filterSnippets: List<FilterSnippet>,
             developerMode: Boolean,
         ): String = JSONObject().apply {
-            put("format", "exvia-config-v1")
+            put("format", "exvia-config-v2")
             put("developerMode", developerMode)
             put("github", JSONObject().apply {
                 put("owner", settings.owner)
@@ -250,7 +278,7 @@ class SettingsStore(context: Context) {
                 put("branch", settings.branch)
                 put("folder", settings.folder)
                 put("defaultFile", settings.defaultJson)
-                put("reportRepo", settings.reportRepo)
+                put("reportRepo", "Exvia")
             })
             put("schema", JSONObject().apply {
                 put("arrayKey", settings.arrayKey)
@@ -260,7 +288,7 @@ class SettingsStore(context: Context) {
                 put("tagsKey", settings.tagsKeyOverride)
             })
             put("display", JSONObject().apply {
-                put("tickerColors", JSONObject(settings.tickerColors))
+                put("legacyTickerColors", JSONObject(settings.tickerColors))
                 put("plotColumns", JSONArray(settings.plotColumns))
                 put("financeColumns", JSONArray(settings.financeColumns))
                 put("uiScale", settings.uiScale)
@@ -301,6 +329,14 @@ class SettingsStore(context: Context) {
             put("customMetrics", JSONArray(customMetricsToJson(settings.customMetrics)))
             put("customPlots", JSONArray(customPlotsToJson(settings.customPlots)))
             put("filterSnippets", JSONArray(filterSnippetsToJson(filterSnippets)))
+            put("flaggingRules", JSONArray(tableStyleRulesToJson(settings.flaggingRules)))
+            put("colorMappings", JSONArray(tableStyleRulesToJson(settings.colorMappings)))
+        }.toString(2) + "\n"
+
+        fun tableRulesToJson(settings: RepoSettings): String = JSONObject().apply {
+            put("format", "exvia-table-rules-v1")
+            put("flaggingRules", JSONArray(tableStyleRulesToJson(settings.flaggingRules)))
+            put("colorMappings", JSONArray(tableStyleRulesToJson(settings.colorMappings)))
         }.toString(2) + "\n"
 
         fun parseColumnList(text: String): List<String> = text.split(',', '\n')
@@ -478,6 +514,37 @@ class SettingsStore(context: Context) {
             });
             return chart;
         """.trimIndent()
+
+        private fun parseTableStyleRules(text: String): List<TableStyleRule> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim()
+                val query = obj.optString("query").trim()
+                if (name.isBlank() || query.isBlank()) return@mapNotNull null
+                TableStyleRule(
+                    id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                    name = name,
+                    query = query,
+                    foregroundScript = obj.optString("foregroundScript"),
+                    backgroundScript = obj.optString("backgroundScript"),
+                    contentScript = obj.optString("contentScript"),
+                    enabled = obj.optBoolean("enabled", true),
+                )
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun tableStyleRulesToJson(items: List<TableStyleRule>): String = JSONArray().apply {
+            items.forEach { item -> put(JSONObject().apply {
+                put("id", item.id)
+                put("name", item.name)
+                put("query", item.query)
+                put("foregroundScript", item.foregroundScript)
+                put("backgroundScript", item.backgroundScript)
+                put("contentScript", item.contentScript)
+                put("enabled", item.enabled)
+            }) }
+        }.toString()
 
         private fun parseFilterSnippets(text: String): List<FilterSnippet> = try {
             val arr = JSONArray(text)

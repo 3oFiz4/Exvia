@@ -22,6 +22,10 @@ class ConfigurationRepositoryImpl(
         selectedFileStore.clear()
     }
 
+    override fun saveTableRulesLocal(settings: RepoSettings) {
+        settingsStore.save(settings)
+    }
+
     override fun loadToken(): String? = tokenStore.load()
     override fun clearToken() = tokenStore.clear()
     override fun loadFilterSnippets(): List<FilterSnippet> = settingsStore.loadFilterSnippets()
@@ -37,6 +41,15 @@ class ConfigurationRepositoryImpl(
             GitHubApi.CONFIG_PATH,
             SettingsStore.settingsToConfigJson(settings, snippets, developerMode),
             "Update Exvia configuration",
+        )
+    }
+
+    override fun synchronizeTableRules(settings: RepoSettings) {
+        val token = tokenStore.load() ?: throw IllegalStateException("GitHub PAT is required.")
+        GitHubApi(token, settings).upsertTextFile(
+            GitHubApi.TABLE_RULES_PATH,
+            SettingsStore.tableRulesToJson(settings),
+            "Update Exvia table rules",
         )
     }
 
@@ -68,7 +81,7 @@ class ConfigurationRepositoryImpl(
         val body = buildString {
             append(description)
             append("\n\n---\n")
-            append("Submitted from Exvia 1.13.2\n")
+            append("Submitted from Exvia 1.13.3\n")
             append("Classification: $classification ($label)\n")
             append("Data repository: ${settings.owner}/${settings.repo}\n")
             append("Branch: ${settings.branch}\n")
@@ -76,7 +89,7 @@ class ConfigurationRepositoryImpl(
         }
         return GitHubApi(token, settings).createIssue(
             targetOwner = settings.owner,
-            targetRepo = settings.reportRepo,
+            targetRepo = "Exvia",
             title = title,
             bodyText = body,
             labels = listOf(label),

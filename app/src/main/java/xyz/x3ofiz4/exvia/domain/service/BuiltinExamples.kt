@@ -2,9 +2,69 @@ package xyz.x3ofiz4.exvia.domain.service
 import xyz.x3ofiz4.exvia.domain.model.custom.CustomMetricDefinition
 import xyz.x3ofiz4.exvia.domain.model.custom.CustomPlotDefinition
 import xyz.x3ofiz4.exvia.domain.model.custom.FilterSnippet
+import xyz.x3ofiz4.exvia.domain.model.custom.TableStyleRule
 
 
 object BuiltinExamples {
+
+    /** Showcase rules; users may copy and change the query, target, or visual assignment. */
+    val flaggingRules: List<TableStyleRule> = listOf(
+        TableStyleRule(
+            id = "example_flag_budget_row",
+            name = "Exceeding daily budget · whole row",
+            query = "SELECT * WHERE price >= 50",
+            backgroundScript = "table['MATCHING_ROW'].back = \"#ff000055\"",
+            foregroundScript = "table['MATCHING_ROW'].fore = \"#EDEDED\"",
+        ),
+        TableStyleRule(
+            id = "example_flag_budget_price",
+            name = "Exceeding daily budget · PRICE cell",
+            query = "SELECT * WHERE price >= 50",
+            backgroundScript = "table['MATCHING_ROW']['PRICE'].back = \"#ff0000aa\"",
+            foregroundScript = "table['MATCHING_ROW']['PRICE'].fore = \"#FFFFFF\"",
+        ),
+        TableStyleRule(
+            id = "example_flag_missing_description",
+            name = "Missing description",
+            query = "SELECT * WHERE description IS NULL",
+            backgroundScript = "table['MATCHING_ROW']['DESCRIPTION'].back = \"#FFB30055\"",
+            contentScript = "table['MATCHING_ROW']['DESCRIPTION'].content = \"Missing description\"",
+        ),
+        TableStyleRule(
+            id = "example_flag_food",
+            name = "Food-related transaction",
+            query = "SELECT * WHERE REGEXP(description, '(?i)food|lunch|dinner|meal')",
+            foregroundScript = "table['MATCHING_ROW']['DESCRIPTION'].fore = \"#29B6F6\"",
+        ),
+    )
+
+    /** Automatically active table mappings. They are editable in Settings → Color Mapping. */
+    val defaultColorMappings: List<TableStyleRule> = listOf(
+        TableStyleRule(
+            id = "mapping_price_income",
+            name = "PRICE · income",
+            query = "SELECT * WHERE REGEXP(price, '^\\+')",
+            foregroundScript = "table['MATCHING_ROW']['PRICE'].fore = \"#34C759\"",
+        ),
+        TableStyleRule(
+            id = "mapping_price_expense",
+            name = "PRICE · expense",
+            query = "SELECT * WHERE price IS NOT NULL AND NOT REGEXP(price, '^\\+')",
+            foregroundScript = "table['MATCHING_ROW']['PRICE'].fore = \"#F72323\"",
+        ),
+        TableStyleRule(
+            id = "mapping_category_food",
+            name = "CATEGORY · FD",
+            query = "SELECT * WHERE category = 'FD'",
+            foregroundScript = "table['MATCHING_ROW']['CATEGORY'].fore = \"#FFB300\"",
+        ),
+        TableStyleRule(
+            id = "mapping_category_beverage",
+            name = "CATEGORY · BVG",
+            query = "SELECT * WHERE category = 'BVG'",
+            foregroundScript = "table['MATCHING_ROW']['CATEGORY'].fore = \"#29B6F6\"",
+        ),
+    )
     val filterSnippets: List<FilterSnippet> = listOf(
         FilterSnippet(
             id = "example_date_month",

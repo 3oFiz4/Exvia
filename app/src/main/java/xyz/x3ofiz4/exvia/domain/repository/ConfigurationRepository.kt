@@ -1,12 +1,12 @@
 package xyz.x3ofiz4.exvia.domain.repository
 
-
 import xyz.x3ofiz4.exvia.domain.model.custom.FilterSnippet
 import xyz.x3ofiz4.exvia.domain.model.settings.RepoSettings
 
 interface ConfigurationRepository {
     fun loadSettings(): RepoSettings
     fun saveLocal(settings: RepoSettings, token: String? = null)
+    fun saveTableRulesLocal(settings: RepoSettings)
     fun loadToken(): String?
     fun clearToken()
     fun loadFilterSnippets(): List<FilterSnippet>
@@ -16,6 +16,7 @@ interface ConfigurationRepository {
     fun repoInitializationAsked(): Boolean
     fun setRepoInitializationAsked(asked: Boolean)
     fun synchronizeConfiguration(settings: RepoSettings, snippets: List<FilterSnippet>, developerMode: Boolean)
+    fun synchronizeTableRules(settings: RepoSettings)
     fun createRepository(settings: RepoSettings, username: String, repo: String, branch: String, folder: String, defaultFile: String): RepoSettings
     fun submitReport(settings: RepoSettings, title: String, description: String, label: String, classification: String, developerMode: Boolean): String
 }

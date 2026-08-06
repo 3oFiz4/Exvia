@@ -8,6 +8,7 @@ import xyz.x3ofiz4.exvia.domain.model.table.*
 import xyz.x3ofiz4.exvia.domain.model.theme.*
 import xyz.x3ofiz4.exvia.domain.service.BuiltinExamples
 import xyz.x3ofiz4.exvia.domain.service.Statistics
+import xyz.x3ofiz4.exvia.domain.service.TableStyleResult
 import xyz.x3ofiz4.exvia.presentation.common.*
 import xyz.x3ofiz4.exvia.presentation.plot.*
 import xyz.x3ofiz4.exvia.presentation.settings.*
@@ -31,7 +32,6 @@ import android.os.SystemClock
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
-import android.text.method.PasswordTransformationMethod
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -138,7 +138,6 @@ class MainActivity : Activity() {
     private lateinit var tickerKeySetting: EditText
     private lateinit var tagsKeySetting: EditText
     private lateinit var tokenSetting: EditText
-    private lateinit var tickerColorsSetting: EditText
     private lateinit var themeSpinner: Spinner
     private lateinit var plotThemeSpinner: Spinner
     private lateinit var primarySetting: EditText
@@ -180,6 +179,8 @@ class MainActivity : Activity() {
     private var suppressUiThemeSelection = false
     private var suppressPlotThemeSelection = false
     private var filterSnippets = mutableListOf<FilterSnippet>()
+    private var flaggingRulesDraft = mutableListOf<TableStyleRule>()
+    private var colorMappingsDraft = mutableListOf<TableStyleRule>()
 
     private val formInputs = linkedMapOf<String, EditText>()
     private var selectedPath: String? = null
@@ -187,8 +188,14 @@ class MainActivity : Activity() {
     private var currentData = TableData(emptyList(), emptyList(), null, null, null, null)
     private var activeTab = Tab.TABLE
     private var busy = false
+    private var queryMode = TableQueryMode.FILTERING
     private var filterEnabled = false
     private var filterQuery = ""
+    private var flagEnabled = false
+    private var flagQuery = ""
+    private var selectedFlagRule: TableStyleRule? = null
+    private var tableStyles = TableStyleResult()
+    private var suppressQueryInputChange = false
     private var developerMode = true
     private var titleTapCount = 0
     private var lastTitleTapAt = 0L
@@ -210,6 +217,8 @@ class MainActivity : Activity() {
         customUiThemesDraft = settings.customUiThemes.toMutableList()
         customPlotThemesDraft = settings.customPlotThemes.toMutableList()
         filterSnippets = settingsState.snippets.toMutableList()
+        flaggingRulesDraft = settings.flaggingRules.toMutableList()
+        colorMappingsDraft = settings.colorMappings.toMutableList()
 
         tooltipController = TooltipController(this, { PRIMARY }, { BLACK }, { WHITE })
         val lightPalette = isLightPalette(settings.palette)
@@ -277,6 +286,10 @@ class MainActivity : Activity() {
                         statusText.text = "Repository initialized. Reloading…"
                         recreate()
                     }
+                    is SettingsEffect.TableRulesSaved -> {
+                        setBusy(false)
+                        statusText.text = effect.message
+                    }
                 }
             }
         }
@@ -287,17 +300,28 @@ class MainActivity : Activity() {
         files = state.files
         selectedPath = state.selectedPath
         currentData = state.sourceData
+        queryMode = state.queryMode
         filterEnabled = state.filterEnabled
         filterQuery = state.filterQuery
+        flagEnabled = state.flagEnabled
+        flagQuery = state.flagQuery
+        selectedFlagRule = state.activeFlagRule
+        tableStyles = state.tableStyles
         busy = state.busy
         if (::statusText.isInitialized && state.status.isNotBlank()) statusText.text = state.status
         if (::selectedFileText.isInitialized) {
             selectedFileText.text = state.selectedPath?.substringAfterLast('/') ?: "No file selected"
         }
-        if (::filterInput.isInitialized && filterInput.text.toString() != state.filterQuery) {
-            filterInput.setText(state.filterQuery)
+        if (::filterInput.isInitialized) {
+            val expected = if (queryMode == TableQueryMode.FILTERING) state.filterQuery else state.flagQuery
+            if (filterInput.text.toString() != expected) {
+                suppressQueryInputChange = true
+                filterInput.setText(expected)
+                suppressQueryInputChange = false
+            }
+            filterInput.setTextColor(if (queryMode == TableQueryMode.FILTERING && state.filterError != null) RED else WHITE)
+            updateQueryControls()
         }
-        if (::filterInput.isInitialized) filterInput.setTextColor(if (state.filterError == null) WHITE else RED)
         if (dataChanged && ::dynamicForm.isInitialized) {
             renderedRevision = state.revision
             renderDynamicForm(state.sourceData)
@@ -459,12 +483,22 @@ class MainActivity : Activity() {
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                    filterQuery = s?.toString().orEmpty()
-                    if (filterEnabled) applyFilterAndRender(showStatus = false)
+                    if (suppressQueryInputChange) return
+                    val value = s?.toString().orEmpty()
+                    if (queryMode == TableQueryMode.FILTERING) {
+                        filterQuery = value
+                        if (filterEnabled) applyFilterAndRender(showStatus = false)
+                    } else {
+                        flagQuery = value
+                        if (flagEnabled) applyFlagAndRender(showStatus = false)
+                    }
                 }
                 override fun afterTextChanged(s: Editable?) = Unit
             })
-            attachTimedHold(this, 1_000L) { showFilterSnippetManager() }
+            attachTimedHold(this, 2_000L) {
+                if (queryMode == TableQueryMode.FILTERING) showFilterSnippetManager()
+                else showFlaggingRuleManager()
+            }
         }
         filteringMethodButton = TextView(this@MainActivity).apply {
             text = "Filtering method"
@@ -474,7 +508,10 @@ class MainActivity : Activity() {
             minHeight = dp(30)
             background = inactiveActionBackground(PRIMARY)
             AppFonts.apply(this, bold = true)
-            setOnClickListener { showFilteringMethodManager() }
+            setOnClickListener {
+                if (queryMode == TableQueryMode.FILTERING) showFilteringMethodManager()
+                else showFlaggingMethodManager()
+            }
         }
         filterToggle = TextView(this@MainActivity).apply {
             text = "Filter OFF"
@@ -485,10 +522,16 @@ class MainActivity : Activity() {
             AppFonts.apply(this, bold = true)
             background = inactiveActionBackground(PRIMARY)
             setOnClickListener {
-                filterEnabled = !filterEnabled
-                updateFilterToggle()
-                applyFilterAndRender(showStatus = true)
+                if (queryMode == TableQueryMode.FILTERING) {
+                    filterEnabled = !filterEnabled
+                    applyFilterAndRender(showStatus = true)
+                } else {
+                    flagEnabled = !flagEnabled
+                    applyFlagAndRender(showStatus = true)
+                }
+                updateQueryControls()
             }
+            attachTimedHold(this, 1_000L) { toggleQueryMode() }
         }
         val filterControl: View = if (developerMode) filterInput else filteringMethodButton
         filterRow.addView(filterControl, LinearLayout.LayoutParams(0, dp(30), 1f).apply { marginEnd = dp(5) })
@@ -637,10 +680,16 @@ class MainActivity : Activity() {
         folderSetting = folder.input
         val defaultFile = configField("Default JSON file", "github.default_file", settings.defaultJson, "Preferred JSON file selected when Exvia loads.")
         defaultFileSetting = defaultFile.input
-        val reportRepo = configField("Report issue repository", "github.report_repo", settings.reportRepo, "Repository that receives bug, enhancement, and feature reports. The owner is github.owner.")
-        reportRepoSetting = reportRepo.input
-        val token = configField("GitHub PAT", "github.pat", settingsViewModel.token() ?: "", "Personal access token used for repository files and issue creation. It is encrypted locally and never uploaded in the synchronized config file.", password = true)
-        tokenSetting = token.input
+        val reportRepo = configField("Report issue repository", "github.report_repo", "Exvia", "Reports are always submitted to the Exvia repository under github.owner.")
+        reportRepoSetting = reportRepo.input.apply {
+            isFocusable = false
+            isClickable = false
+            isLongClickable = false
+        }
+        val token = configField("GitHub PAT", "github.pat", "", "Personal access token used for repository files and issue creation. It is encrypted locally and never uploaded in the synchronized config file.", password = true)
+        tokenSetting = token.input.apply {
+            hint = if (settingsViewModel.token() == null) "github.pat" else "github.pat  ${"*".repeat(12)}"
+        }
 
         val array = configField("Object array key (fallback)", "schema.array_key", settings.arrayKey, "If the JSON root is an object rather than an array, this key selects the row array.")
         arrayKeySetting = array.input
@@ -652,8 +701,9 @@ class MainActivity : Activity() {
         tickerKeySetting = ticker.input
         val tags = configField("Tags key override", "schema.tags_key", settings.tagsKeyOverride, "Optional tags column. Tags are edited as comma-separated values.")
         tagsKeySetting = tags.input
-        val tickerColors = configField("Ticker color mapping", "display.ticker_colors", settingsViewModel.tickerColorsToText(settings.tickerColors), "One mapping per line, for example FD=#FFB300.", multiline = true)
-        tickerColorsSetting = tickerColors.input
+        val colorMappingButton = styledButton("Color Mapping").apply {
+            setOnClickListener { showColorMappingManager() }
+        }
         val plotColumns = configField("Columns with plotting enabled", "stats.plot_columns", settings.plotColumns.joinToString(", "), "Comma-separated numeric JSON keys that receive built-in plots. Default: price.")
         plotColumnsSetting = plotColumns.input
         val financeColumns = configField("Columns reported as personal finance", "finance.columns", settings.financeColumns.joinToString(", "), "Comma-separated numeric JSON keys used for personal-finance reports. Default: price.")
@@ -798,8 +848,10 @@ class MainActivity : Activity() {
 
         if (developerMode) {
             body.addView(accordion("Schema & Display", tooltip = "Schema overrides, category colors, plot-enabled columns, and finance-report columns.") { container ->
-                listOf(array.wrapper, date.wrapper, money.wrapper, ticker.wrapper, tags.wrapper, tickerColors.wrapper, plotColumns.wrapper, financeColumns.wrapper)
+                listOf(array.wrapper, date.wrapper, money.wrapper, ticker.wrapper, tags.wrapper, plotColumns.wrapper, financeColumns.wrapper)
                     .forEach { container.addView(it, spacedMatchWidth(5)) }
+                container.addView(infoText("Automatic cell/row styling rules. They use the same SQLite-like matcher as Filtering and are applied whenever the table renders.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+                container.addView(colorMappingButton, spacedMatchWidth(5))
             }, spacedMatchWidth(10))
 
             customMetricList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
@@ -847,16 +899,15 @@ class MainActivity : Activity() {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val input = styledInput(key).apply {
             setText(value)
+            if (!password) setOnLongClickListener { true }
             if (password) {
-                transformationMethod = PasswordTransformationMethod.getInstance()
-                onFocusChangeListener = View.OnFocusChangeListener { _, hasFocus ->
-                    transformationMethod = if (hasFocus) null else PasswordTransformationMethod.getInstance()
-                    if (hasFocus && text.isNotEmpty()) setSelection(text.length)
-                }
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                isLongClickable = true
+                setTextIsSelectable(true)
             }
             if (multiline) { isSingleLine = false; minLines = 3; gravity = Gravity.TOP }
         }
-        tooltipController.attachHold(input, { description })
+        if (!password) tooltipController.attachHold(input, { description })
         row.addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         row.addView(TextView(this).apply {
             text = "ⓘ"; textSize = 17f; gravity = Gravity.CENTER; setTextColor(PRIMARY); setPadding(dp(5), 0, dp(2), 0); AppFonts.apply(this, bold = true)
@@ -1374,12 +1425,14 @@ return Plot.plot({
             moneyKeyOverride = moneyKeySetting.text.toString().trim(),
             tickerKeyOverride = tickerKeySetting.text.toString().trim(),
             tagsKeyOverride = tagsKeySetting.text.toString().trim(),
-            tickerColors = settingsViewModel.parseTickerColors(tickerColorsSetting.text.toString()),
+            tickerColors = settings.tickerColors,
+            flaggingRules = flaggingRulesDraft.toList(),
+            colorMappings = colorMappingsDraft.toList(),
             plotColumns = settingsViewModel.parseColumnList(plotColumnsSetting.text.toString()),
             financeColumns = settingsViewModel.parseColumnList(financeColumnsSetting.text.toString()),
             customMetrics = customMetricsDraft.toList(),
             customPlots = customPlotsDraft.toList(),
-            reportRepo = reportRepoSetting.text.toString().trim().ifBlank { "finance_app" },
+            reportRepo = "Exvia",
             uiScale = uiScale!!,
             textScale = textScale!!,
             rowsPerPage = rowsPerPage!!,
@@ -1448,7 +1501,7 @@ return Plot.plot({
                 if (description.isBlank()) { descriptionInput.error = "Describe the report"; return@setOnClickListener }
                 val selectedIndex = typeSpinner.selectedItemPosition.coerceIn(categories.indices)
                 dialog.dismiss()
-                setBusy(true, "Creating issue in ${settings.owner}/${settings.reportRepo}…")
+                setBusy(true, "Creating issue in ${settings.owner}/Exvia…")
                 settingsViewModel.submitReport(
                     settings = settings,
                     title = issueTitle,
@@ -1529,11 +1582,34 @@ return Plot.plot({
         mainViewModel.setFilter(filterEnabled, filterQuery, announce = showStatus)
     }
 
-    private fun updateFilterToggle() {
+    private fun applyFlagAndRender(showStatus: Boolean) {
+        mainViewModel.setFlag(flagEnabled, flagQuery, selectedFlagRule, announce = showStatus)
+    }
+
+    private fun toggleQueryMode() {
+        queryMode = if (queryMode == TableQueryMode.FILTERING) TableQueryMode.FLAGGING else TableQueryMode.FILTERING
+        mainViewModel.setQueryMode(queryMode)
+        suppressQueryInputChange = true
+        filterInput.setText(if (queryMode == TableQueryMode.FILTERING) filterQuery else flagQuery)
+        suppressQueryInputChange = false
+        updateQueryControls()
+        Toast.makeText(this, if (queryMode == TableQueryMode.FILTERING) "Filtering mode" else "Flagging mode", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun updateFilterToggle() = updateQueryControls()
+
+    private fun updateQueryControls() {
         if (!::filterToggle.isInitialized) return
-        filterToggle.text = if (filterEnabled) "Filter ON" else "Filter OFF"
-        filterToggle.setTextColor(if (filterEnabled) PRIMARY else MUTED)
-        filterToggle.background = if (filterEnabled) activeButtonBackground(PRIMARY) else inactiveActionBackground(PRIMARY)
+        val enabled = if (queryMode == TableQueryMode.FILTERING) filterEnabled else flagEnabled
+        val modeName = if (queryMode == TableQueryMode.FILTERING) "Filter" else "Flag"
+        filterToggle.text = "$modeName ${if (enabled) "ON" else "OFF"}"
+        filterToggle.setTextColor(if (enabled) PRIMARY else MUTED)
+        filterToggle.background = if (enabled) activeButtonBackground(PRIMARY) else inactiveActionBackground(PRIMARY)
+        if (::filterInput.isInitialized) filterInput.hint = "SELECT * WHERE …"
+        if (::filteringMethodButton.isInitialized) {
+            filteringMethodButton.text = selectedFlagRule?.name?.takeIf { queryMode == TableQueryMode.FLAGGING }
+                ?: if (queryMode == TableQueryMode.FILTERING) "Filtering method" else "Flagging method"
+        }
     }
 
     private fun renderDynamicForm(data: TableData, preserved: Map<String, String> = emptyMap()) {
@@ -1755,6 +1831,193 @@ return Plot.plot({
         showDialog(dialog)
     }
 
+    private fun showFlaggingRuleManager() {
+        var managerDialog: AlertDialog? = null
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            setBackgroundColor(BLACK)
+        }
+        list.addView(infoText("Flagging never removes rows. The syntax selects matching rows; .fore, .back, and .content alter the full MATCHING_ROW or a named cell.").apply {
+            setTextColor(MUTED)
+        }, spacedMatchWidth(6))
+        list.addView(accordion("Showcase examples", initiallyOpen = false) { examples ->
+            BuiltinExamples.flaggingRules.forEach { rule ->
+                examples.addView(TextView(this).apply {
+                    text = "${rule.name}\n${rule.query}"
+                    maxLines = 3
+                    textSize = 11.5f
+                    setTextColor(WHITE)
+                    setPadding(dp(6), dp(5), dp(6), dp(5))
+                    AppFonts.apply(this, textScale = settings.textScale)
+                    setOnClickListener { selectFlaggingRule(rule); managerDialog?.dismiss() }
+                }, spacedMatchWidth(3))
+            }
+        }, spacedMatchWidth(5))
+
+        list.addView(infoText("Saved flagging methods").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(3))
+        if (flaggingRulesDraft.isEmpty()) list.addView(infoText("No saved flagging methods.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+        flaggingRulesDraft.forEach { rule ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(TextView(this).apply {
+                text = "${if (rule.enabled) "●" else "○"} ${rule.name}\n${rule.query}"
+                maxLines = 3
+                textSize = 11.5f
+                setTextColor(if (rule.enabled) WHITE else MUTED)
+                setPadding(dp(6), dp(4), dp(6), dp(4))
+                AppFonts.apply(this, textScale = settings.textScale)
+                setOnClickListener { selectFlaggingRule(rule); managerDialog?.dismiss() }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = if (rule.enabled) "On" else "Off"; gravity = Gravity.CENTER; setTextColor(PRIMARY)
+                AppFonts.apply(this, textScale = settings.textScale)
+                setOnClickListener {
+                    flaggingRulesDraft = flaggingRulesDraft.map { if (it.id == rule.id) it.copy(enabled = !it.enabled) else it }.toMutableList()
+                    persistTableRules("Flagging method updated.")
+                    managerDialog?.dismiss(); showFlaggingRuleManager()
+                }
+            }, LinearLayout.LayoutParams(dp(42), dp(34)))
+            row.addView(TextView(this).apply {
+                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this)
+                setOnClickListener { managerDialog?.dismiss(); editTableStyleRule(rule, mapping = false) }
+            }, LinearLayout.LayoutParams(dp(48), dp(34)))
+            row.addView(TextView(this).apply {
+                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true)
+                setOnClickListener {
+                    flaggingRulesDraft.removeAll { it.id == rule.id }
+                    if (selectedFlagRule?.id == rule.id) { selectedFlagRule = null; flagEnabled = false }
+                    persistTableRules("Flagging method removed.")
+                    managerDialog?.dismiss(); showFlaggingRuleManager()
+                }
+            }, LinearLayout.LayoutParams(dp(34), dp(34)))
+            list.addView(row, matchWidth())
+        }
+        list.addView(styledButton("+ New flagging method").apply {
+            setOnClickListener { managerDialog?.dismiss(); editTableStyleRule(null, mapping = false) }
+        }, spacedMatchWidth(5))
+        managerDialog = AlertDialog.Builder(this).setTitle("Flagging methods").setView(ScrollView(this).apply { addView(list, matchWidth()) }).setNegativeButton("Close", null).create()
+        showDialog(managerDialog!!)
+    }
+
+    /** Regular-mode selector: names are visible while SQL/style implementation stays hidden. */
+    private fun showFlaggingMethodManager() {
+        var dialog: AlertDialog? = null
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(4), dp(12), dp(4)); setBackgroundColor(BLACK) }
+        list.addView(infoText("Choose a flagging method. Matching rows remain in the table and only their presentation changes.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+        list.addView(accordion("Showcase methods", initiallyOpen = false) { body ->
+            BuiltinExamples.flaggingRules.forEach { rule -> body.addView(TextView(this).apply {
+                text = rule.name; setTextColor(WHITE); setPadding(dp(8), dp(6), dp(8), dp(6)); AppFonts.apply(this)
+                setOnClickListener { selectFlaggingRule(rule); dialog?.dismiss() }
+            }, matchWidth()) }
+        }, spacedMatchWidth(5))
+        list.addView(accordion("Saved methods", initiallyOpen = true) { body ->
+            flaggingRulesDraft.filter { it.enabled }.forEach { rule -> body.addView(TextView(this).apply {
+                text = rule.name; setTextColor(WHITE); setPadding(dp(8), dp(6), dp(8), dp(6)); AppFonts.apply(this)
+                setOnClickListener { selectFlaggingRule(rule); dialog?.dismiss() }
+            }, matchWidth()) }
+            if (flaggingRulesDraft.none { it.enabled }) body.addView(infoText("No enabled flagging methods.").apply { setTextColor(MUTED) }, matchWidth())
+        }, spacedMatchWidth(5))
+        dialog = AlertDialog.Builder(this).setTitle("Flagging method").setView(ScrollView(this).apply { addView(list, matchWidth()) }).setNegativeButton("Close", null).create()
+        showDialog(dialog!!)
+    }
+
+    private fun selectFlaggingRule(rule: TableStyleRule) {
+        selectedFlagRule = rule
+        flagQuery = rule.query
+        suppressQueryInputChange = true
+        if (::filterInput.isInitialized && queryMode == TableQueryMode.FLAGGING) filterInput.setText(rule.query)
+        suppressQueryInputChange = false
+        if (::filteringMethodButton.isInitialized && queryMode == TableQueryMode.FLAGGING) filteringMethodButton.text = rule.name
+        if (flagEnabled) applyFlagAndRender(showStatus = true)
+    }
+
+    private fun showColorMappingManager() {
+        var dialog: AlertDialog? = null
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(4), dp(12), dp(4)); setBackgroundColor(BLACK) }
+        list.addView(infoText("Color Mapping is always evaluated when the table loads. Rules use Filtering syntax, but they never hide rows.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+        if (colorMappingsDraft.isEmpty()) list.addView(infoText("No mappings. Use Restore defaults or create one.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+        colorMappingsDraft.forEach { rule ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(TextView(this).apply {
+                text = "${if (rule.enabled) "●" else "○"} ${rule.name}\n${rule.query}"
+                maxLines = 3; textSize = 11.5f; setTextColor(if (rule.enabled) WHITE else MUTED); setPadding(dp(6), dp(4), dp(6), dp(4)); AppFonts.apply(this)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = if (rule.enabled) "On" else "Off"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this)
+                setOnClickListener {
+                    colorMappingsDraft = colorMappingsDraft.map { if (it.id == rule.id) it.copy(enabled = !it.enabled) else it }.toMutableList()
+                    persistTableRules("Color Mapping updated."); dialog?.dismiss(); showColorMappingManager()
+                }
+            }, LinearLayout.LayoutParams(dp(42), dp(34)))
+            row.addView(TextView(this).apply {
+                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this)
+                setOnClickListener { dialog?.dismiss(); editTableStyleRule(rule, mapping = true) }
+            }, LinearLayout.LayoutParams(dp(48), dp(34)))
+            row.addView(TextView(this).apply {
+                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true)
+                setOnClickListener { colorMappingsDraft.removeAll { it.id == rule.id }; persistTableRules("Color Mapping removed."); dialog?.dismiss(); showColorMappingManager() }
+            }, LinearLayout.LayoutParams(dp(34), dp(34)))
+            list.addView(row, matchWidth())
+        }
+        list.addView(styledButton("+ New mapping").apply { setOnClickListener { dialog?.dismiss(); editTableStyleRule(null, mapping = true) } }, spacedMatchWidth(5))
+        list.addView(styledButton("Restore PRICE/CATEGORY defaults", accent = SECONDARY).apply {
+            setOnClickListener {
+                colorMappingsDraft = BuiltinExamples.defaultColorMappings.toMutableList()
+                persistTableRules("Default Color Mapping restored.")
+                dialog?.dismiss(); showColorMappingManager()
+            }
+        }, spacedMatchWidth(4))
+        dialog = AlertDialog.Builder(this).setTitle("Color Mapping").setView(ScrollView(this).apply { addView(list, matchWidth()) }).setNegativeButton("Close", null).create()
+        showDialog(dialog!!)
+    }
+
+    private fun editTableStyleRule(existing: TableStyleRule?, mapping: Boolean) {
+        val name = styledInput("rule.name").apply { setText(existing?.name.orEmpty()) }
+        val query = styledInput("rule.syntax · SELECT * WHERE …").apply { isSingleLine = false; minLines = 3; gravity = Gravity.TOP; setText(existing?.query ?: "SELECT * WHERE ") }
+        val fore = styledInput("COLOR / .fore assignment").apply { isSingleLine = false; minLines = 2; gravity = Gravity.TOP; setText(existing?.foregroundScript.orEmpty()) }
+        val back = styledInput("BACKGROUND_COLOR / .back assignment").apply { isSingleLine = false; minLines = 2; gravity = Gravity.TOP; setText(existing?.backgroundScript.orEmpty()) }
+        val content = styledInput("CONTENT / .content assignment").apply { isSingleLine = false; minLines = 2; gravity = Gravity.TOP; setText(existing?.contentScript.orEmpty()) }
+        val example = infoText("Targets: table['MATCHING_ROW'].back, table['MATCHING_ROW']['PRICE'].fore, or table['MATCHING_ROW']['DESCRIPTION'].content. Content supports ${'$'}{COLUMN} and ${'$'}value.").apply { setTextColor(MUTED) }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(3), dp(14), dp(3)); setBackgroundColor(BLACK)
+            addView(example, spacedMatchWidth(6)); listOf(name, query, fore, back, content).forEach { addView(it, spacedMatchWidth(5)) }
+        }
+        val dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New ${if (mapping) "Color Mapping" else "flagging method"}" else "Edit ${existing.name}")
+            .setView(ScrollView(this).apply { addView(body, matchWidth()) }).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val n = name.text.toString().trim(); val q = query.text.toString().trim()
+                if (n.isBlank()) { name.error = "Name is required"; return@setOnClickListener }
+                if (q.isBlank()) { query.error = "Syntax is required"; return@setOnClickListener }
+                if (fore.text.isBlank() && back.text.isBlank() && content.text.isBlank()) { back.error = "Add at least one visual/content modifier"; return@setOnClickListener }
+                val next = TableStyleRule(existing?.id ?: UUID.randomUUID().toString(), n, q, fore.text.toString().trim(), back.text.toString().trim(), content.text.toString().trim(), existing?.enabled ?: true)
+                if (mapping) {
+                    colorMappingsDraft = if (existing == null) (colorMappingsDraft + next).toMutableList() else colorMappingsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
+                } else {
+                    flaggingRulesDraft = if (existing == null) (flaggingRulesDraft + next).toMutableList() else flaggingRulesDraft.map { if (it.id == existing.id) next else it }.toMutableList()
+                    selectedFlagRule = next
+                    flagQuery = next.query
+                }
+                persistTableRules(if (mapping) "Color Mapping saved." else "Flagging method saved.")
+                dialog.dismiss()
+                if (mapping) showColorMappingManager() else showFlaggingRuleManager()
+            }
+        }
+        showDialog(dialog)
+    }
+
+    private fun persistTableRules(message: String) {
+        settings = settings.copy(
+            flaggingRules = flaggingRulesDraft.toList(),
+            colorMappings = colorMappingsDraft.toList(),
+        )
+        mainViewModel.updateStyleSettings(settings)
+        if (flagEnabled) applyFlagAndRender(showStatus = false)
+        setBusy(true, "Saving table rules to ${RepoConfig.TABLE_RULES_PATH}…")
+        settingsViewModel.saveTableRules(settings)
+        statusText.text = message
+    }
+
     private fun promptAddField() {
         val input = styledInput("Field key, e.g. merchant")
         val dialog = AlertDialog.Builder(this)
@@ -1825,15 +2088,19 @@ return Plot.plot({
             val start = currentPageIndex * rowsPerPage
             val end = minOf(start + rowsPerPage, paginatedTableData.rows.size)
             paginatedTableData.rows.subList(start.coerceAtMost(end), end).forEach { row ->
-                val tr = TableRow(this).apply { setBackgroundColor(BLACK) }
+                val resolvedRow = tableStyles.rows[row.originalIndex]
+                val rowForeground = resolvedRow?.foreground?.let(::parseRuleColorOrNull) ?: WHITE
+                val rowBackground = resolvedRow?.background?.let(::parseRuleColorOrNull) ?: BLACK
+                val tr = TableRow(this).apply { setBackgroundColor(rowBackground) }
                 paginatedTableData.keys.forEach { key ->
-                    var textColor = WHITE
-                    val value = row.values[key].orEmpty()
-                    if (key == paginatedTableData.moneyKey) textColor = if (value.trim().startsWith("+")) GREEN else RED
-                    if (key == paginatedTableData.tickerKey) textColor = tickerColor(value)
-                    tr.addView(cell(value, textColor = textColor, onClick = { editRow(row) }))
+                    val cellStyle = resolvedRow?.cells?.entries?.firstOrNull { it.key.equals(key, true) }?.value
+                    val rawValue = row.values[key].orEmpty()
+                    val shownValue = cellStyle?.content ?: resolvedRow?.content ?: rawValue
+                    val textColor = cellStyle?.foreground?.let(::parseRuleColorOrNull) ?: rowForeground
+                    val backgroundColor = cellStyle?.background?.let(::parseRuleColorOrNull) ?: rowBackground
+                    tr.addView(cell(shownValue, textColor = textColor, backgroundColor = backgroundColor, onClick = { editRow(row) }))
                 }
-                tr.addView(cell("×", textColor = PRIMARY, onClick = { confirmDeleteRow(row) }).apply {
+                tr.addView(cell("×", textColor = PRIMARY, backgroundColor = rowBackground, onClick = { confirmDeleteRow(row) }).apply {
                     gravity = Gravity.CENTER
                     AppFonts.apply(this, bold = true)
                 })
@@ -2498,22 +2765,33 @@ return Plot.plot({
         })
     }
 
-    private fun cell(textValue: String, header: Boolean = false, textColor: Int = WHITE, onClick: (() -> Unit)? = null): TextView =
-        TextView(this).apply {
+    private fun cell(
+        textValue: String,
+        header: Boolean = false,
+        textColor: Int = WHITE,
+        backgroundColor: Int = BLACK,
+        onClick: (() -> Unit)? = null,
+    ): TextView = TextView(this).apply {
             text = textValue
             setTextColor(if (header) MUTED else textColor)
-            setBackgroundColor(BLACK)
+            setBackgroundColor(if (header) BLACK else backgroundColor)
             setPadding(dp(8), 3, dp(8), 3)
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
             AppFonts.apply(this, bold = header, textScale = settings.textScale)
             if (onClick != null) setOnClickListener { if (!busy) onClick() }
         }
 
-    private fun tickerColor(value: String): Int {
-        val configured = settings.tickerColors.entries.firstOrNull { it.key.equals(value.trim(), true) }?.value
-            ?: return WHITE
-        return try { Color.parseColor(configured) } catch (_: IllegalArgumentException) { WHITE }
-    }
+    /** Rule scripts use CSS-style #RRGGBBAA for 8-digit colors. */
+    private fun parseRuleColorOrNull(value: String): Int? = try {
+        val clean = value.trim()
+        if (Regex("^#[0-9A-Fa-f]{8}$").matches(clean)) {
+            val rr = clean.substring(1, 3)
+            val gg = clean.substring(3, 5)
+            val bb = clean.substring(5, 7)
+            val aa = clean.substring(7, 9)
+            Color.parseColor("#$aa$rr$gg$bb")
+        } else Color.parseColor(clean)
+    } catch (_: IllegalArgumentException) { null }
 
     private fun showTab(tab: Tab) {
         activeTab = tab
