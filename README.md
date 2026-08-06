@@ -1,4 +1,4 @@
-# Exvia v26.8.4
+# Exvia v26.8.7
 <img width="236" height="236" alt="logo" src="https://github.com/user-attachments/assets/049d1e07-5866-4c51-bcb8-d0a83479a0b1" />
 
 *Exvia*, originates from Latin, *ex* means Out, and *via* means track, where it signify the act of tracking and monitoring every out (expenses) of your finance.
@@ -47,10 +47,12 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 11. Beautiful font family
 12. Explanation for each input and text, hold for 3 seconds to show tooltip
 13. Developer Options (click 3x to the Title "Exvia" on Table to toggle)
-14. Extended customization of plot, uses D3.JS (for complex plot) and ObservablePlot (for simpler plot), you can make your own!
+14. Extended customization of plot, uses D3.JS (for complex plot) and ObservablePlot (for simpler plot), you can make your own! (If you are not familiar with programming, please use AI)
 15. Report button, so you do not have create Issue on GitHub anymore :).
 16. Resizeable UI and Text
-17. Pagination within Table
+17. Pagination within Table (Buttons are intuitive, you can also click on the `Page i / n` to input a specific `i` page.
+18. Flagging option (hold click at `Filtering OFF/ON` button for two seconds, and hold click at the Flagging Input to see available snippets)
+19. Customizable color mapping (function are similar to flagging, but automatically activate at initial load)
 
 # Usage
 Mostly you'll get the intuition of how to use the app by yourself. 
@@ -60,5 +62,5 @@ Mostly you'll get the intuition of how to use the app by yourself.
 2. ~~More plots~~
 3. A image scanner feature to scan image whether at real-time or assuming there is a given folder, parse the image and apply the operation to the database directly. This is useful, especially when most of your transactions relied on digital banking app, so you do not have to type anymore, but instead the app will do it's job.
 4. ~~Add an option whether to Disable/Enable Developer option, therefore offering this app even to lay-people that has no strong knowledge whether in programming, finance, or statistics.~~ (toggle by clicking the title text "Exvia" at Table section three times)
-5. Add an automatic operation to create a GitHub account, assuming the user is lay-people
+5. Add an automatic operation to create a GitHub account, assuming the user is lay-people (!might not be possible, since it violate GitHub ToS!)
 6. Add an extended finance for Investment, Debt, and more. (By theory, you could imitate this in the app right now, without having this feature amended for next release. By categorizing your specific data, say INV (for Investment), create the field necessary, such as Future Value (FV), you could create a custom metric that calculates them)
