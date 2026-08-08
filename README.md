@@ -1,7 +1,8 @@
 # Exvia v26.8.7
+
 <img width="236" height="236" alt="logo" src="https://github.com/user-attachments/assets/049d1e07-5866-4c51-bcb8-d0a83479a0b1" />
 
-*Exvia*, originates from Latin, *ex* means Out, and *via* means track, where it signify the act of tracking and monitoring every out (expenses) of your finance.
+_Exvia_, originates from Latin, _ex_ means Out, and _via_ means track, where it signify the act of tracking and monitoring every out (expenses) of your finance.
 
 Minimal Android expense editor backed directly by JSON files in a GitHub repository, made especially for Programmers.
 
@@ -19,6 +20,7 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 2. Within the GitHub repository, initialize a folder within, it can be anything, I personally created `Financial/`
 3. Within the folder, create your first expenses `.json`. It track any .json file under `Financial/`, I personally name it this way `@MMMM_expenses.json`
 4. For the template, copy and paste this into the expenses file:
+
 ```
 [
   {
@@ -29,6 +31,7 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
   }
 ]
 ```
+
 5. Ensure every changes it commited, now git clone this repository on your Android Studio `git clone https://github.com/3oFiz4/Exvia`
 6. Install the apk
 7. When you open the app for the first time, you will be instructed to input everything to the config (autosaves) it will require you to input your GitHub PAT, copy your GitHub PAT and paste it there. This is the "password" or "token" to access your repository, because it is private.
@@ -37,7 +40,7 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 # Features
 
 1. CRUD (Create-Read-Update-Delete) Operation for Expenses, Income, and for every Table.
-2. Built-in Filtering via SQLite syntax (e.g., SELECT * WHERE ...)
+2. Built-in Filtering via SQLite syntax (e.g., SELECT \* WHERE ...)
 3. No managed databases, the app is not controlled by the author. You create your own, you manage it.
 4. Automatic and smart synchronization between application with database
 5. Configurable color for table's value
@@ -57,6 +60,7 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 19. Customizable color mapping (function are similar to flagging, but automatically activate at initial load)
 
 # To-Do (next release)
+
 > R = Current release;
 > R+1 = Next release;
 > R+2 = The one after next;
@@ -111,7 +115,7 @@ API_KEY, BASE_URL, MODEL
     Generate comprehensive and easy-to-understand explanation regarding this financial report:
     Net Cash Flow = -272.25
     Savings Rate = 38%
-    Expense Ratio = 1:5 
+    Expense Ratio = 1:5
     ...
 
     With additional metric such that:
@@ -122,6 +126,7 @@ API_KEY, BASE_URL, MODEL
 
     Use formal and concise language.
     ```
+
   </pre>
 </details>
 
@@ -131,3 +136,5 @@ API_KEY, BASE_URL, MODEL
 - [ ] Export report as Document or .pdf. This will also include the plotting. `(R+3)`
 - [ ] Minimal, Lightweight, and Accurate voice recognition model that can be triggered by saying the word "Fin", and will listen for any word uttered by the user, and amending what is spoken to the database at a time `(R+4)`
 - [ ] Add an extended finance for Investment, Debt, and more. (By theory, you could imitate this in the app right now, without having this feature amended for next release. By categorizing your specific data, say INV (for Investment), create the field necessary, such as Future Value (FV), you could create a custom metric that calculates them) `(R+5)`
+- [ ] Improve overall UI, adding icon, and more `(R+2)`
+- [ ] Provide databaes alternative, such as Codeberg, or even MongoDB, Supabase, Discord (as a Database), or even Google Drive `(R+5)`

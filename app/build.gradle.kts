@@ -3,15 +3,15 @@ plugins {
 }
 
 android {
-    namespace = "com.example.exp_tracker"
+    namespace = "xyz.x3ofiz4.exvia"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.exp_tracker"
+        applicationId = "xyz.x3ofiz4.exvia"
         minSdk = 26
         targetSdk = 36
-        versionCode = 15
-        versionName = "1.12.2"
+        versionCode = 19
+        versionName = "1.13.2"
         val hasExistingLogo = file("src/main/assets/logo.png").exists() ||
             file("src/main/res/drawable-nodpi/exvia_logo.png").exists()
         manifestPlaceholders["exviaAppIcon"] = if (hasExistingLogo) "@drawable/exvia_logo" else "@android:drawable/sym_def_app_icon"

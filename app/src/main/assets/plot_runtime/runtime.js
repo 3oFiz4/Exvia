@@ -123,6 +123,54 @@
       const redraw = typeof config.redraw === 'function' ? config.redraw : null;
       const selection = d3.select(node);
 
+      // Custom plots may not expose their scales. In that case Exvia applies a
+      // fixed-mark viewport zoom: positions/data spans zoom, while strokes,
+      // circle radii, text size, and vertical-bar widths stay constant in px.
+      const genericSvg = !redraw && node instanceof SVGSVGElement ? node : null;
+      const baseViewBox = genericSvg ? (() => {
+        const current = genericSvg.viewBox?.baseVal;
+        if (current && current.width > 0 && current.height > 0) return {x:current.x,y:current.y,width:current.width,height:current.height};
+        return {x:0,y:0,width,height};
+      })() : null;
+      if (genericSvg) {
+        genericSvg.dataset.exviaZoomBound = 'true';
+        genericSvg.querySelectorAll('path,line,polyline,polygon,rect,circle,ellipse').forEach(mark => mark.setAttribute('vector-effect','non-scaling-stroke'));
+        genericSvg.querySelectorAll('circle').forEach(mark => { if (!mark.dataset.exviaBaseR) mark.dataset.exviaBaseR = mark.getAttribute('r') || '0'; });
+        genericSvg.querySelectorAll('text').forEach(mark => {
+          if (!mark.dataset.exviaBaseFontSize) mark.dataset.exviaBaseFontSize = getComputedStyle(mark).fontSize || '11px';
+        });
+        genericSvg.querySelectorAll('rect').forEach(mark => {
+          if (!mark.dataset.exviaBaseWidth) mark.dataset.exviaBaseWidth = mark.getAttribute('width') || '0';
+          if (!mark.dataset.exviaBaseX) mark.dataset.exviaBaseX = mark.getAttribute('x') || '0';
+        });
+      }
+      const genericRedraw = transform => {
+        if (!genericSvg || !baseViewBox) return;
+        const k = Math.max(1, transform.k || 1);
+        const visibleWidth = baseViewBox.width / k;
+        const visibleHeight = baseViewBox.height / k;
+        const x = baseViewBox.x - (transform.x / k);
+        const y = baseViewBox.y - (transform.y / k);
+        genericSvg.setAttribute('viewBox', `${x} ${y} ${visibleWidth} ${visibleHeight}`);
+        genericSvg.querySelectorAll('circle').forEach(mark => {
+          const r = Number(mark.dataset.exviaBaseR || 0);
+          if (Number.isFinite(r)) mark.setAttribute('r', String(r / k));
+        });
+        genericSvg.querySelectorAll('text').forEach(mark => {
+          const raw = String(mark.dataset.exviaBaseFontSize || '11').replace('px','');
+          const size = Number(raw);
+          if (Number.isFinite(size)) mark.style.fontSize = `${size / k}px`;
+        });
+        genericSvg.querySelectorAll('rect').forEach(mark => {
+          const baseWidthValue = Number(mark.dataset.exviaBaseWidth || 0);
+          const baseXValue = Number(mark.dataset.exviaBaseX || 0);
+          if (!Number.isFinite(baseWidthValue) || !Number.isFinite(baseXValue) || baseWidthValue <= 0) return;
+          const widthValue = baseWidthValue / k;
+          mark.setAttribute('width', String(widthValue));
+          mark.setAttribute('x', String(baseXValue + (baseWidthValue - widthValue) / 2));
+        });
+      };
+
       selection.style('touch-action', 'none');
       if (node.style) node.style.touchAction = 'none';
 
@@ -130,7 +178,7 @@
       let pendingTransform = d3.zoomIdentity;
       const commit = () => {
         frame = 0;
-        redraw?.(pendingTransform);
+        if (redraw) redraw(pendingTransform); else genericRedraw(pendingTransform);
       };
       const schedule = transform => {
         pendingTransform = transform;
@@ -693,6 +741,14 @@
     if (result instanceof Node) root.appendChild(result);
     else if (result && typeof result.node === 'function' && result.node() instanceof Node) root.appendChild(result.node());
     else if (result && result.node instanceof Node) root.appendChild(result.node);
+    const customSvg = root.querySelector('svg');
+    if (customSvg && customSvg.dataset.exviaZoomBound !== 'true') {
+      helpers.attachZoom(customSvg, {
+        width: context.width,
+        height: context.height,
+        maxScale: 40
+      });
+    }
     if (!root.childNodes.length) {
       const note = document.createElement('div');
       note.className = 'exvia-error';
