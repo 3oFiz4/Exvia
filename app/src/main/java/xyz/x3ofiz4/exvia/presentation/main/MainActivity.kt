@@ -82,6 +82,7 @@ class MainActivity : Activity() {
     private lateinit var tooltipController: TooltipController
     private lateinit var plotRuntime: PlotWebRuntime
     private lateinit var customMetricEngine: CustomMetricEngine
+    private lateinit var fieldFormulaEngine: FieldFormulaEngine
     private val uiHandler = Handler(Looper.getMainLooper())
 
     private val palette get() = settings.palette
@@ -113,8 +114,11 @@ class MainActivity : Activity() {
     private lateinit var filterInput: EditText
     private lateinit var filterToggle: TextView
     private lateinit var amendButton: Button
+    private lateinit var undoButton: Button
+    private lateinit var redoButton: Button
     private lateinit var createFileButton: Button
     private lateinit var removeFileButton: Button
+    private lateinit var fileScriptButton: Button
     private lateinit var tableTabButton: Button
     private lateinit var statTabButton: Button
     private lateinit var filesTabButton: Button
@@ -164,14 +168,15 @@ class MainActivity : Activity() {
     private lateinit var plotTooltipBackgroundSetting: EditText
     private lateinit var plotTooltipTextSetting: EditText
     private lateinit var plotTooltipBorderSetting: EditText
-    private lateinit var reportRepoSetting: EditText
     private lateinit var uiScaleSetting: EditText
     private lateinit var textScaleSetting: EditText
     private lateinit var rowsPerPageSetting: EditText
+    private lateinit var undoHistoryLimitSetting: EditText
     private lateinit var customMetricList: LinearLayout
     private lateinit var customPlotList: LinearLayout
     private var customMetricsDraft = mutableListOf<CustomMetricDefinition>()
     private var customPlotsDraft = mutableListOf<CustomPlotDefinition>()
+    private var fileScriptsDraft = mutableListOf<FileScriptDefinition>()
     private var customUiThemesDraft = mutableListOf<NamedUiTheme>()
     private var customPlotThemesDraft = mutableListOf<NamedPlotTheme>()
     private var uiThemeChoices: List<ThemeChoice> = emptyList()
@@ -181,6 +186,7 @@ class MainActivity : Activity() {
     private var filterSnippets = mutableListOf<FilterSnippet>()
     private var flaggingRulesDraft = mutableListOf<TableStyleRule>()
     private var colorMappingsDraft = mutableListOf<TableStyleRule>()
+    private var imaginaryFieldsDraft = mutableListOf<ImaginaryFieldDefinition>()
 
     private val formInputs = linkedMapOf<String, EditText>()
     private var selectedPath: String? = null
@@ -195,6 +201,8 @@ class MainActivity : Activity() {
     private var flagQuery = ""
     private var selectedFlagRule: TableStyleRule? = null
     private var tableStyles = TableStyleResult()
+    private var imaginaryKeys: Set<String> = emptySet()
+    private var lastImaginaryEvaluationSignature: String? = null
     private var suppressQueryInputChange = false
     private var developerMode = true
     private var titleTapCount = 0
@@ -214,11 +222,13 @@ class MainActivity : Activity() {
         developerMode = settingsState.developerMode
         customMetricsDraft = settings.customMetrics.toMutableList()
         customPlotsDraft = settings.customPlots.toMutableList()
+        fileScriptsDraft = settings.fileScripts.toMutableList()
         customUiThemesDraft = settings.customUiThemes.toMutableList()
         customPlotThemesDraft = settings.customPlotThemes.toMutableList()
         filterSnippets = settingsState.snippets.toMutableList()
         flaggingRulesDraft = settings.flaggingRules.toMutableList()
         colorMappingsDraft = settings.colorMappings.toMutableList()
+        imaginaryFieldsDraft = settings.imaginaryFields.toMutableList()
 
         tooltipController = TooltipController(this, { PRIMARY }, { BLACK }, { WHITE })
         val lightPalette = isLightPalette(settings.palette)
@@ -231,6 +241,7 @@ class MainActivity : Activity() {
 
         plotRuntime = PlotWebRuntime(this)
         customMetricEngine = CustomMetricEngine(plotRuntime) { settings.plotTheme }
+        fieldFormulaEngine = FieldFormulaEngine(plotRuntime) { settings.plotTheme }
         setContentView(buildUi())
         bindViewModels()
         window.decorView.post { plotRuntime.prewarm() }
@@ -307,7 +318,10 @@ class MainActivity : Activity() {
         flagQuery = state.flagQuery
         selectedFlagRule = state.activeFlagRule
         tableStyles = state.tableStyles
+        imaginaryKeys = state.imaginaryKeys
         busy = state.busy
+        if (::undoButton.isInitialized) { undoButton.isEnabled = !state.busy && state.canUndo; undoButton.alpha = if (undoButton.isEnabled) 1f else 0.38f }
+        if (::redoButton.isInitialized) { redoButton.isEnabled = !state.busy && state.canRedo; redoButton.alpha = if (redoButton.isEnabled) 1f else 0.38f }
         if (::statusText.isInitialized && state.status.isNotBlank()) statusText.text = state.status
         if (::selectedFileText.isInitialized) {
             selectedFileText.text = state.selectedPath?.substringAfterLast('/') ?: "No file selected"
@@ -330,8 +344,54 @@ class MainActivity : Activity() {
             renderFiles()
             updateFilterToggle()
             AppFonts.applyToTree(drawerRoot, settings.textScale)
+            scheduleImaginaryFieldEvaluation(state)
         }
         setBusy(state.busy)
+    }
+
+    private fun scheduleImaginaryFieldEvaluation(state: MainUiState) {
+        val path = state.selectedPath ?: return
+        val definitions = settings.imaginaryFields.filter { it.enabled }
+        val baseKeys = state.sourceData.keys.filterNot { key -> state.imaginaryKeys.any { it.equals(key, true) } }
+        val baseRows = state.sourceData.rows.map { row ->
+            row.copy(values = LinkedHashMap(row.values.filterKeys { key -> baseKeys.any { it.equals(key, true) } }))
+        }
+        val base = state.sourceData.copy(
+            keys = baseKeys,
+            rows = baseRows,
+            dateKey = settings.detectDateKey(baseKeys),
+            moneyKey = settings.detectMoneyKey(baseKeys),
+            tickerKey = settings.detectTickerKey(baseKeys),
+            tagsKey = settings.detectTagsKey(baseKeys),
+        )
+        val signature = buildString {
+            append(path).append('|')
+            definitions.forEach { append(it.id).append(':').append(it.name).append(':').append(it.expression).append(':').append(it.manualValues.hashCode()).append(':').append(it.enabled).append('|') }
+            base.rows.forEach { append(it.originalIndex).append(':').append(it.originalJson.hashCode()).append(';') }
+        }
+        if (signature == lastImaginaryEvaluationSignature) return
+        lastImaginaryEvaluationSignature = signature
+        if (definitions.isEmpty()) {
+            if (state.imaginaryKeys.isNotEmpty()) mainViewModel.applyImaginaryValues(settings, emptyMap())
+            return
+        }
+        fieldFormulaEngine.evaluateImaginaryFields(
+            definitions = definitions,
+            table = base,
+            fileName = path.substringAfterLast('/'),
+        ) { result ->
+            runOnUiThread {
+                result.fold(
+                    onSuccess = { mainViewModel.applyImaginaryValues(settings, it) },
+                    onFailure = {
+                        // Do not cache a failed evaluation. A temporary WebView/runtime
+                        // failure must be allowed to retry on the next render/state update.
+                        lastImaginaryEvaluationSignature = null
+                        statusText.text = "Imaginary field formula error: ${it.message ?: it.javaClass.simpleName}"
+                    },
+                )
+            }
+        }
     }
 
     private fun handleTitleTap() {
@@ -464,9 +524,40 @@ class MainActivity : Activity() {
             setOnClickListener { promptAddField() }
         }
         addView(addField, matchWidth())
+        val removeField = TextView(this@MainActivity).apply {
+            text = "− Remove field"
+            setTextColor(RED)
+            setPadding(dp(8), dp(4), dp(8), dp(7))
+            AppFonts.apply(this)
+            setOnClickListener { promptRemoveField() }
+        }
+        addView(removeField, matchWidth())
+        val addImaginaryField = TextView(this@MainActivity).apply {
+            text = "+ Add imaginary field"
+            setTextColor(PRIMARY)
+            setPadding(dp(8), dp(7), dp(8), dp(5))
+            AppFonts.apply(this)
+            setOnClickListener { promptAddImaginaryField() }
+        }
+        addView(addImaginaryField, matchWidth())
+        val removeImaginaryField = TextView(this@MainActivity).apply {
+            text = "− Remove imaginary field"
+            setTextColor(RED)
+            setPadding(dp(8), dp(4), dp(8), dp(9))
+            AppFonts.apply(this)
+            setOnClickListener { promptRemoveImaginaryField() }
+        }
+        addView(removeImaginaryField, matchWidth())
 
         amendButton = styledButton("Amend").apply { setOnClickListener { amend() } }
         addView(amendButton, spacedMatchWidth(4))
+
+        val historyActions = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+        undoButton = styledButton("Undo").apply { isEnabled = false; alpha = 0.38f; setOnClickListener { if (!busy) mainViewModel.undo(settings) } }
+        redoButton = styledButton("Redo").apply { isEnabled = false; alpha = 0.38f; setOnClickListener { if (!busy) mainViewModel.redo(settings) } }
+        historyActions.addView(undoButton, LinearLayout.LayoutParams(0, dp(32), 1f).apply { marginEnd = dp(3) })
+        historyActions.addView(redoButton, LinearLayout.LayoutParams(0, dp(32), 1f).apply { marginStart = dp(3) })
+        addView(historyActions, spacedMatchWidth(4))
 
         val filterRow = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -477,7 +568,8 @@ class MainActivity : Activity() {
             isLongClickable = false
             minHeight = dp(30)
             maxHeight = dp(30)
-            setPadding(dp(8), dp(2), dp(8), dp(2))
+            setPadding(dp(8), dp
+            (2), dp(8), dp(2))
             textSize = 12f
             setOnLongClickListener { true }
             addTextChangedListener(object : TextWatcher {
@@ -631,6 +723,8 @@ class MainActivity : Activity() {
         actions.addView(createFileButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(3) })
         actions.addView(removeFileButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(3) })
         addView(actions, matchWidth())
+        fileScriptButton = styledButton("SQLite file scripts").apply { setOnClickListener { showFileScriptManager() } }
+        addView(fileScriptButton, spacedMatchWidth(8))
 
         filesList = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
@@ -680,12 +774,6 @@ class MainActivity : Activity() {
         folderSetting = folder.input
         val defaultFile = configField("Default JSON file", "github.default_file", settings.defaultJson, "Preferred JSON file selected when Exvia loads.")
         defaultFileSetting = defaultFile.input
-        val reportRepo = configField("Report issue repository", "github.report_repo", "Exvia", "Reports are always submitted to the Exvia repository under github.owner.")
-        reportRepoSetting = reportRepo.input.apply {
-            isFocusable = false
-            isClickable = false
-            isLongClickable = false
-        }
         val token = configField("GitHub PAT", "github.pat", "", "Personal access token used for repository files and issue creation. It is encrypted locally and never uploaded in the synchronized config file.", password = true)
         tokenSetting = token.input.apply {
             hint = if (settingsViewModel.token() == null) "github.pat" else "github.pat  ${"*".repeat(12)}"
@@ -704,6 +792,9 @@ class MainActivity : Activity() {
         val colorMappingButton = styledButton("Color Mapping").apply {
             setOnClickListener { showColorMappingManager() }
         }
+        val imaginaryFieldsButton = styledButton("Imaginary fields").apply {
+            setOnClickListener { showImaginaryFieldManager() }
+        }
         val plotColumns = configField("Columns with plotting enabled", "stats.plot_columns", settings.plotColumns.joinToString(", "), "Comma-separated numeric JSON keys that receive built-in plots. Default: price.")
         plotColumnsSetting = plotColumns.input
         val financeColumns = configField("Columns reported as personal finance", "finance.columns", settings.financeColumns.joinToString(", "), "Comma-separated numeric JSON keys used for personal-finance reports. Default: price.")
@@ -715,6 +806,8 @@ class MainActivity : Activity() {
         textScaleSetting = textScale.input.apply { inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL }
         val rowsPerPage = configField("Rows per table page", "display.rows_per_page", settings.rowsPerPage.toString(), "Number of rows shown on one Table page. Allowed range: 1–500.")
         rowsPerPageSetting = rowsPerPage.input.apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        val undoHistory = configField("Undo/Redo history", "display.undo_history_limit", settings.undoHistoryLimit.toString(), "Maximum Table CRUD undo history retained in memory. Only changed-row deltas are stored. Allowed range: 1–50.")
+        undoHistoryLimitSetting = undoHistory.input.apply { inputType = InputType.TYPE_CLASS_NUMBER }
 
         val primary = colorConfigField("Primary", "theme.primary", settings.palette.primary, "Active/focused state and highest-priority outline.")
         primarySetting = primary.input
@@ -786,7 +879,7 @@ class MainActivity : Activity() {
 
         if (developerMode) {
             body.addView(accordion("GitHub", initiallyOpen = true, tooltip = "Repository connection, report target, data folder, default file, and encrypted GitHub PAT.") { container ->
-                listOf(owner.wrapper, repo.wrapper, branch.wrapper, folder.wrapper, defaultFile.wrapper, reportRepo.wrapper, token.wrapper)
+                listOf(owner.wrapper, repo.wrapper, branch.wrapper, folder.wrapper, defaultFile.wrapper, token.wrapper)
                     .forEach { container.addView(it, spacedMatchWidth(5)) }
                 container.addView(styledButton("Clear stored PAT", accent = SECONDARY).apply {
                     setOnClickListener {
@@ -820,7 +913,7 @@ class MainActivity : Activity() {
         }, spacedMatchWidth(10))
 
         body.addView(accordion("Interface", tooltip = "Resize the full UI and text independently. Changes take effect after Save settings and reload.") { container ->
-            listOf(uiScale.wrapper, textScale.wrapper, rowsPerPage.wrapper).forEach { container.addView(it, spacedMatchWidth(5)) }
+            listOf(uiScale.wrapper, textScale.wrapper, rowsPerPage.wrapper, undoHistory.wrapper).forEach { container.addView(it, spacedMatchWidth(5)) }
         }, spacedMatchWidth(10))
 
         body.addView(accordion("Plotting", tooltip = "Built-in and named custom plot themes used by the D3.js and Observable Plot runtime.") { container ->
@@ -852,6 +945,7 @@ class MainActivity : Activity() {
                     .forEach { container.addView(it, spacedMatchWidth(5)) }
                 container.addView(infoText("Automatic cell/row styling rules. They use the same SQLite-like matcher as Filtering and are applied whenever the table renders.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
                 container.addView(colorMappingButton, spacedMatchWidth(5))
+                container.addView(imaginaryFieldsButton, spacedMatchWidth(5))
             }, spacedMatchWidth(10))
 
             customMetricList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
@@ -1210,7 +1304,7 @@ class MainActivity : Activity() {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(2), 0, dp(2)) }
             row.addView(infoText(metric.name).apply { setTextColor(if (metric.enabled) WHITE else MUTED) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             row.addView(TextView(this).apply { text = "Edit"; setTextColor(PRIMARY); gravity = Gravity.CENTER; AppFonts.apply(this); setOnClickListener { editCustomMetric(metric) } }, LinearLayout.LayoutParams(dp(50), dp(32)))
-            row.addView(TextView(this).apply { text = "×"; setTextColor(RED); gravity = Gravity.CENTER; AppFonts.apply(this, bold = true); setOnClickListener { customMetricsDraft.removeAll { it.id == metric.id }; renderCustomMetricSettings() } }, LinearLayout.LayoutParams(dp(36), dp(32)))
+            row.addView(TextView(this).apply { text = "×"; setTextColor(RED); gravity = Gravity.CENTER; AppFonts.apply(this, bold = true); setOnClickListener { customMetricsDraft.removeAll { it.id == metric.id }; persistCustomMetrics("Custom metric removed."); renderCustomMetricSettings() } }, LinearLayout.LayoutParams(dp(36), dp(32)))
             customMetricList.addView(row, matchWidth())
         }
     }
@@ -1246,6 +1340,7 @@ class MainActivity : Activity() {
                 val next = CustomMetricDefinition(existing?.id ?: UUID.randomUUID().toString(), n, code, existing?.enabled ?: true)
                 customMetricsDraft = if (existing == null) (customMetricsDraft + next).toMutableList()
                     else customMetricsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
+                persistCustomMetrics("Custom metric auto-saved.")
                 renderCustomMetricSettings(); dialog.dismiss()
             }
         }
@@ -1282,13 +1377,14 @@ class MainActivity : Activity() {
                 text = if (plot.enabled) "ON" else "OFF"; setTextColor(if (plot.enabled) GREEN else MUTED); gravity = Gravity.CENTER; AppFonts.apply(this, bold = true)
                 setOnClickListener {
                     customPlotsDraft = customPlotsDraft.map { if (it.id == plot.id) it.copy(enabled = !it.enabled) else it }.toMutableList()
+                    persistCustomPlots("Custom plot updated.")
                     renderCustomPlotSettings()
                 }
             }, LinearLayout.LayoutParams(dp(44), dp(30)))
             row.addView(TextView(this).apply { text = "Edit"; setTextColor(PRIMARY); gravity = Gravity.CENTER; AppFonts.apply(this); setOnClickListener { editCustomPlot(plot) } }, LinearLayout.LayoutParams(dp(50), dp(30)))
             row.addView(TextView(this).apply {
                 text = "×"; setTextColor(RED); gravity = Gravity.CENTER; AppFonts.apply(this, bold = true)
-                setOnClickListener { customPlotsDraft.removeAll { it.id == plot.id }; renderCustomPlotSettings() }
+                setOnClickListener { customPlotsDraft.removeAll { it.id == plot.id }; persistCustomPlots("Custom plot removed."); renderCustomPlotSettings() }
             }, LinearLayout.LayoutParams(dp(34), dp(30)))
             customPlotList.addView(row, matchWidth())
         }
@@ -1353,10 +1449,23 @@ return Plot.plot({
                 val next = CustomPlotDefinition(existing?.id ?: UUID.randomUUID().toString(), n, code, engineValues[engine.selectedItemPosition], enabled)
                 customPlotsDraft = if (existing == null) (customPlotsDraft + next).toMutableList()
                     else customPlotsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
+                persistCustomPlots("Custom plot auto-saved.")
                 renderCustomPlotSettings(); dialog.dismiss()
             }
         }
         showDialog(dialog)
+    }
+
+    private fun persistCustomMetrics(message: String) {
+        settings = settings.copy(customMetrics = customMetricsDraft.toList())
+        settingsViewModel.saveCustomMetrics(settings)
+        statusText.text = message
+    }
+
+    private fun persistCustomPlots(message: String) {
+        settings = settings.copy(customPlots = customPlotsDraft.toList())
+        settingsViewModel.saveCustomPlots(settings)
+        statusText.text = message
     }
 
     private fun saveSettings() {
@@ -1391,6 +1500,7 @@ return Plot.plot({
         val uiScale = uiScaleSetting.text.toString().trim().toDoubleOrNull()
         val textScale = textScaleSetting.text.toString().trim().toDoubleOrNull()
         val rowsPerPage = rowsPerPageSetting.text.toString().trim().toIntOrNull()
+        val undoHistoryLimit = undoHistoryLimitSetting.text.toString().trim().toIntOrNull()
         if (uiScale == null || uiScale !in 0.70..1.60) {
             uiScaleSetting.error = "Use a value from 0.70 to 1.60"
             invalid = true
@@ -1401,6 +1511,10 @@ return Plot.plot({
         }
         if (rowsPerPage == null || rowsPerPage !in 1..500) {
             rowsPerPageSetting.error = "Use a whole number from 1 to 500"
+            invalid = true
+        }
+        if (undoHistoryLimit == null || undoHistoryLimit !in 1..50) {
+            undoHistoryLimitSetting.error = "Use a whole number from 1 to 50"
             invalid = true
         }
         if (invalid) return
@@ -1432,10 +1546,12 @@ return Plot.plot({
             financeColumns = settingsViewModel.parseColumnList(financeColumnsSetting.text.toString()),
             customMetrics = customMetricsDraft.toList(),
             customPlots = customPlotsDraft.toList(),
-            reportRepo = "Exvia",
+            fileScripts = fileScriptsDraft.toList(),
+            imaginaryFields = imaginaryFieldsDraft.toList(),
             uiScale = uiScale!!,
             textScale = textScale!!,
             rowsPerPage = rowsPerPage!!,
+            undoHistoryLimit = undoHistoryLimit!!,
             themePreset = selectedTheme,
             palette = currentUiPalette(),
             plotTheme = currentPlotTheme(),
@@ -1482,7 +1598,7 @@ return Plot.plot({
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, dp(14), 0)
             setBackgroundColor(BLACK)
-            addView(infoText("Reports are created as GitHub Issues in ${settings.owner}/${settings.reportRepo}. The selected type is attached as an issue label.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(infoText("Reports are created as GitHub Issues in ${settings.owner}/Exvia. The selected type is attached as an issue label.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
             addView(typeSpinner, spacedMatchWidth(6))
             addView(titleInput, spacedMatchWidth(6))
             addView(descriptionInput, matchWidth())
@@ -1617,7 +1733,7 @@ return Plot.plot({
         formInputs.clear()
         if (data.keys.isEmpty()) {
             dynamicForm.addView(TextView(this).apply {
-                text = "No fields inferred yet. Use + Add field, or select a JSON file containing at least one object."
+                text = "No fields inferred yet. Use + Add field / + Add imaginary field, or select a JSON file containing at least one object."
                 setTextColor(MUTED)
                 setPadding(dp(8), dp(8), dp(8), dp(10))
                 AppFonts.apply(this)
@@ -1625,10 +1741,11 @@ return Plot.plot({
             return
         }
         for (key in data.keys) {
+            if (imaginaryKeys.any { it.equals(key, true) }) continue
             val initial = preserved[key] ?: if (key == data.dateKey) currentDateTime() else ""
             val input = inputForKey(key, initial, data)
             formInputs[key] = input
-            dynamicForm.addView(input, spacedMatchWidth(4))
+            dynamicForm.addView(formulaInputRow(key, input), spacedMatchWidth(4))
         }
     }
 
@@ -1666,6 +1783,78 @@ return Plot.plot({
                 setText(value)
             }
         }
+    }
+
+    private fun formulaInputRow(key: String, input: EditText): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(TextView(this@MainActivity).apply {
+            text = "ƒx"
+            gravity = Gravity.CENTER
+            setTextColor(PRIMARY)
+            setPadding(dp(4), 0, dp(4), 0)
+            background = inactiveActionBackground(PRIMARY)
+            AppFonts.apply(this, bold = true, textScale = settings.textScale)
+            tooltipController.attachHold(this, { "Formula for '$key'. JavaScript starts with ${xyz.x3ofiz4.exvia.domain.service.FormulaSupport.JS_PREFIX}; SQLite scalar formulas start with ${xyz.x3ofiz4.exvia.domain.service.FormulaSupport.SQL_PREFIX}." })
+            setOnClickListener { showFieldFormulaEditor(key, input) }
+        }, LinearLayout.LayoutParams(dp(42), dp(38)).apply { marginStart = dp(4) })
+    }
+
+    private fun showFieldFormulaEditor(key: String, target: EditText) {
+        val parsed = xyz.x3ofiz4.exvia.domain.service.FormulaSupport.parse(target.text.toString())
+        val languages = listOf("JavaScript", "SQLite")
+        val spinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, languages)
+            backgroundTintList = inputTint()
+            setSelection(if (parsed.kind == xyz.x3ofiz4.exvia.domain.service.FormulaSupport.Kind.SQLITE) 1 else 0)
+        }
+        val editor = JavaScriptCodeEditor(this).apply {
+            hint = "Formula for $key"
+            setText(when (parsed.kind) {
+                xyz.x3ofiz4.exvia.domain.service.FormulaSupport.Kind.JAVASCRIPT,
+                xyz.x3ofiz4.exvia.domain.service.FormulaSupport.Kind.SQLITE -> parsed.body
+                else -> ""
+            })
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+            addView(infoText("JavaScript exposes row, table, field, index, jsonFile, d3, Plot, aq, theme, helpers and context. SQLite uses SELECT <column|literal> [WHERE ...] with the same WHERE syntax as Filtering." ).apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(spinner, spacedMatchWidth(5))
+            addView(editor, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(250)))
+        }
+        val dialog = AlertDialog.Builder(this).setTitle("ƒx · $key").setView(body)
+            .setNeutralButton("Clear formula", null).setNegativeButton("Cancel", null).setPositiveButton("Apply", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { target.setText(""); dialog.dismiss() }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val code = editor.text.toString().trim()
+                if (code.isBlank()) { editor.error = "Enter a formula"; return@setOnClickListener }
+                target.setText(if (spinner.selectedItemPosition == 1) {
+                    xyz.x3ofiz4.exvia.domain.service.FormulaSupport.SQL_PREFIX + code
+                } else {
+                    xyz.x3ofiz4.exvia.domain.service.FormulaSupport.JS_PREFIX + code
+                })
+                dialog.dismiss()
+            }
+        }
+        showDialog(dialog)
+    }
+
+    private fun coreTableData(): TableData {
+        val keys = currentData.keys.filterNot { key -> imaginaryKeys.any { it.equals(key, true) } }
+        val rows = currentData.rows.map { row ->
+            row.copy(values = LinkedHashMap(row.values.filterKeys { key -> keys.any { it.equals(key, true) } }))
+        }
+        return currentData.copy(
+            keys = keys,
+            rows = rows,
+            dateKey = settings.detectDateKey(keys),
+            moneyKey = settings.detectMoneyKey(keys),
+            tickerKey = settings.detectTickerKey(keys),
+            tagsKey = settings.detectTagsKey(keys),
+        )
     }
 
     private fun suggestionAdapter(items: List<String>): ArrayAdapter<String> = object : ArrayAdapter<String>(
@@ -2019,26 +2208,239 @@ return Plot.plot({
     }
 
     private fun promptAddField() {
-        val input = styledInput("Field key, e.g. merchant")
+        val keyInput = styledInput("Field key, e.g. merchant")
+        val valueInput = styledInput("Optional value or formula")
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+            addView(infoText("Adds a real field to the current form. It becomes part of the JSON schema only after Amend/Edit commits a nonblank value. The optional value supports JavaScript (=) and SQLite (==) formulas.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(keyInput, spacedMatchWidth(5))
+            addView(formulaInputRow("new field", valueInput), matchWidth())
+        }
         val dialog = AlertDialog.Builder(this)
             .setTitle("Add field")
-            .setMessage("Adds a field to the current form. It becomes part of the JSON schema after a row is committed with a value.")
-            .setView(input)
+            .setView(body)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Add", null)
             .create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val key = input.text.toString().trim()
-                if (key.isBlank()) { input.error = "Key is required"; return@setOnClickListener }
-                if (currentData.keys.any { it.equals(key, true) }) { input.error = "Field already exists"; return@setOnClickListener }
+                val key = keyInput.text.toString().trim()
+                if (key.isBlank()) { keyInput.error = "Key is required"; return@setOnClickListener }
+                if (currentData.keys.any { it.equals(key, true) }) { keyInput.error = "Field already exists"; return@setOnClickListener }
                 val preserved = collectFormValues()
-                mainViewModel.replaceSchema(settings, currentData.keys + key)
+                valueInput.text.toString().takeIf { it.isNotBlank() }?.let { preserved[key] = it }
+                mainViewModel.replaceSchema(settings, coreTableData().keys + key)
                 renderDynamicForm(mainViewModel.state.value.sourceData, preserved)
                 dialog.dismiss()
             }
         }
         showDialog(dialog)
+    }
+
+    private fun promptRemoveField() {
+        val keys = coreTableData().keys
+        if (keys.isEmpty()) {
+            statusText.text = "There are no real JSON fields to remove."
+            return
+        }
+        val labels = keys.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Remove field")
+            .setItems(labels) { _, which ->
+                val key = keys[which]
+                val affectedRows = coreTableData().rows.count { row ->
+                    row.values.keys.any { it.equals(key, ignoreCase = true) }
+                }
+                val message = if (affectedRows == 0) {
+                    "Remove '$key' from the current form/schema? It is not currently stored in any JSON row."
+                } else {
+                    "Remove '$key' from $affectedRows row(s) in ${selectedPath?.substringAfterLast('/') ?: "the selected JSON file"}? This commits the modified JSON to GitHub."
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("Remove $key?")
+                    .setMessage(message)
+                    .setNegativeButton("No", null)
+                    .setPositiveButton("Yes") { _, _ ->
+                        if (affectedRows == 0) {
+                            val preserved = collectFormValues().filterKeys { !it.equals(key, ignoreCase = true) }.toMutableMap()
+                            mainViewModel.replaceSchema(settings, keys.filterNot { it.equals(key, ignoreCase = true) })
+                            renderDynamicForm(mainViewModel.state.value.sourceData, preserved)
+                            statusText.text = "Field '$key' removed from the local schema."
+                        } else {
+                            if (requireToken() == null) return@setPositiveButton
+                            mainViewModel.removeField(settings, key)
+                        }
+                    }
+                    .create().also { showDialog(it) }
+            }
+            .setNegativeButton("Cancel", null)
+            .create().also { showDialog(it) }
+    }
+
+    private fun promptRemoveImaginaryField() {
+        if (imaginaryFieldsDraft.isEmpty()) {
+            statusText.text = "There are no imaginary fields to remove."
+            return
+        }
+        val fields = imaginaryFieldsDraft.toList()
+        AlertDialog.Builder(this)
+            .setTitle("Remove imaginary field")
+            .setItems(fields.map { it.name }.toTypedArray()) { _, which ->
+                val field = fields[which]
+                AlertDialog.Builder(this)
+                    .setTitle("Remove ${field.name}?")
+                    .setMessage("This removes the imaginary column definition and its manual values. The core JSON file is not modified.")
+                    .setNegativeButton("No", null)
+                    .setPositiveButton("Yes") { _, _ ->
+                        imaginaryFieldsDraft.removeAll { it.id == field.id }
+                        persistImaginaryFields("Imaginary field '${field.name}' removed.")
+                    }
+                    .create().also { showDialog(it) }
+            }
+            .setNegativeButton("Cancel", null)
+            .create().also { showDialog(it) }
+    }
+
+    private fun promptAddImaginaryField(
+        existing: ImaginaryFieldDefinition? = null,
+        snippet: ImaginaryFieldSnippet? = null,
+    ) {
+        val suggestedName = snippet?.name?.uppercase(Locale.US)?.replace(Regex("[^A-Z0-9]+"), "_")?.trim('_').orEmpty()
+        val name = styledInput("imaginary_field.name").apply { setText(existing?.name ?: suggestedName) }
+        val value = styledInput("imaginary_field.optional_value_or_formula").apply {
+            isSingleLine = false
+            minLines = 2
+            gravity = Gravity.TOP
+            setText(existing?.expression ?: snippet?.expression.orEmpty())
+        }
+        val formulaRow = formulaInputRow(existing?.name ?: "imaginary field", value)
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+            addView(infoText("Imaginary fields never modify the Financial JSON. The value is optional: leave it blank to create a manual-only column. Use = for JavaScript and == for a SQLite scalar expression. A manual value entered from Edit row overrides the formula for that row.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(accordion("Built-in snippets", initiallyOpen = false) { examples ->
+                BuiltinExamples.imaginaryFieldSnippets.forEach { item ->
+                    examples.addView(TextView(this@MainActivity).apply {
+                        text = "${item.name}\n${item.description}"
+                        textSize = 11.5f
+                        setTextColor(WHITE)
+                        setPadding(dp(6), dp(5), dp(6), dp(5))
+                        AppFonts.apply(this, textScale = settings.textScale)
+                        setOnClickListener {
+                            if (name.text.isBlank()) name.setText(item.name.uppercase(Locale.US).replace(Regex("[^A-Z0-9]+"), "_").trim('_'))
+                            value.setText(item.expression)
+                        }
+                    }, spacedMatchWidth(3))
+                }
+            }, spacedMatchWidth(6))
+            addView(name, spacedMatchWidth(5))
+            addView(formulaRow, matchWidth())
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "Add imaginary field" else "Edit imaginary field")
+            .setView(ScrollView(this).apply { addView(body, matchWidth()) })
+            .setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val fieldName = name.text.toString().trim()
+                val expression = value.text.toString()
+                if (fieldName.isBlank()) { name.error = "Name is required"; return@setOnClickListener }
+                val coreKeys = coreTableData().keys
+                if (coreKeys.any { it.equals(fieldName, true) }) {
+                    name.error = "A real JSON field already uses this name"
+                    return@setOnClickListener
+                }
+                val duplicate = imaginaryFieldsDraft.firstOrNull {
+                    it.id != existing?.id && it.name.equals(fieldName, ignoreCase = true)
+                }
+                val base = ImaginaryFieldDefinition(
+                    id = existing?.id ?: duplicate?.id ?: UUID.randomUUID().toString(),
+                    name = fieldName,
+                    expression = expression,
+                    manualValues = existing?.manualValues ?: duplicate?.manualValues ?: emptyMap(),
+                    enabled = existing?.enabled ?: duplicate?.enabled ?: true,
+                )
+                fun save(replaceId: String? = existing?.id ?: duplicate?.id) {
+                    imaginaryFieldsDraft = if (replaceId == null) {
+                        (imaginaryFieldsDraft + base).toMutableList()
+                    } else {
+                        imaginaryFieldsDraft.map { if (it.id == replaceId) base.copy(id = replaceId) else it }.toMutableList()
+                    }
+                    persistImaginaryFields("Imaginary field saved.")
+                    dialog.dismiss()
+                }
+                if (duplicate != null && existing == null) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Replace ${duplicate.name}?")
+                        .setMessage("An imaginary field with this column name already exists. Replace its definition? Existing manual row values will be preserved.")
+                        .setNegativeButton("No", null)
+                        .setPositiveButton("Yes") { _, _ -> save(duplicate.id) }
+                        .create().also { showDialog(it) }
+                } else save()
+            }
+        }
+        showDialog(dialog)
+    }
+
+    private fun showImaginaryFieldManager() {
+        var dialog: AlertDialog? = null
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            setBackgroundColor(BLACK)
+        }
+        list.addView(infoText("Imaginary fields extend only Exvia's effective table clone. Their headers use Primary. Blank expressions create manual-only columns; = runs JavaScript; == runs a SQLite scalar formula.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+        list.addView(accordion("Built-in snippets", initiallyOpen = false) { examples ->
+            BuiltinExamples.imaginaryFieldSnippets.forEach { snippet ->
+                examples.addView(TextView(this).apply {
+                    text = "${snippet.name}\n${snippet.description}"
+                    maxLines = 3
+                    textSize = 11.5f
+                    setTextColor(WHITE)
+                    setPadding(dp(6), dp(5), dp(6), dp(5))
+                    AppFonts.apply(this, textScale = settings.textScale)
+                    setOnClickListener { dialog?.dismiss(); promptAddImaginaryField(snippet = snippet) }
+                }, spacedMatchWidth(3))
+            }
+        }, spacedMatchWidth(6))
+        imaginaryFieldsDraft.forEach { field ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            val mode = if (field.expression.isBlank()) "manual" else when (xyz.x3ofiz4.exvia.domain.service.FormulaSupport.parse(field.expression).kind) {
+                xyz.x3ofiz4.exvia.domain.service.FormulaSupport.Kind.JAVASCRIPT -> "js"
+                xyz.x3ofiz4.exvia.domain.service.FormulaSupport.Kind.SQLITE -> "sql"
+                xyz.x3ofiz4.exvia.domain.service.FormulaSupport.Kind.VALUE -> "value"
+            }
+            row.addView(infoText("${if (field.enabled) "●" else "○"} ${field.name} · $mode").apply { setTextColor(if (field.enabled) PRIMARY else MUTED) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = if (field.enabled) "On" else "Off"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this)
+                setOnClickListener {
+                    imaginaryFieldsDraft = imaginaryFieldsDraft.map { if (it.id == field.id) it.copy(enabled = !it.enabled) else it }.toMutableList()
+                    persistImaginaryFields("Imaginary field updated."); dialog?.dismiss(); showImaginaryFieldManager()
+                }
+            }, LinearLayout.LayoutParams(dp(42), dp(32)))
+            row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { dialog?.dismiss(); promptAddImaginaryField(field) } }, LinearLayout.LayoutParams(dp(48), dp(32)))
+            row.addView(TextView(this).apply {
+                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true)
+                setOnClickListener {
+                    imaginaryFieldsDraft.removeAll { it.id == field.id }
+                    persistImaginaryFields("Imaginary field removed."); dialog?.dismiss(); showImaginaryFieldManager()
+                }
+            }, LinearLayout.LayoutParams(dp(34), dp(32)))
+            list.addView(row, matchWidth())
+        }
+        if (imaginaryFieldsDraft.isEmpty()) list.addView(infoText("No imaginary fields configured.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+        list.addView(styledButton("+ Add imaginary field").apply { setOnClickListener { dialog?.dismiss(); promptAddImaginaryField() } }, spacedMatchWidth(4))
+        dialog = AlertDialog.Builder(this).setTitle("Imaginary fields").setView(ScrollView(this).apply { addView(list, matchWidth()) }).setNegativeButton("Close", null).create()
+        showDialog(dialog!!)
+    }
+
+    private fun persistImaginaryFields(message: String) {
+        settings = settings.copy(imaginaryFields = imaginaryFieldsDraft.toList())
+        lastImaginaryEvaluationSignature = null
+        settingsViewModel.saveImaginaryFields(settings)
+        scheduleImaginaryFieldEvaluation(mainViewModel.state.value)
+        statusText.text = message
     }
 
     private fun amend() {
@@ -2048,16 +2450,30 @@ return Plot.plot({
             return
         }
         if (requireToken() == null) return
-        val values = collectFormValues()
-        val preview = values.entries.filter { it.value.isNotBlank() }.take(8)
-            .joinToString("\n") { "${it.key}: ${it.value}" }
-            .ifBlank { "All fields are blank; the repository writer may only add an inferred date." }
-        AlertDialog.Builder(this)
-            .setTitle("Amend expense?")
-            .setMessage("$preview\n\nCommit this change to ${path.substringAfterLast('/')}?")
-            .setNegativeButton("No", null)
-            .setPositiveButton("Yes") { _, _ -> mainViewModel.amend(settings, values) }
-            .create().also { showDialog(it) }
+        val rawValues = collectFormValues()
+        setBusy(true, "Evaluating field formulas…")
+        fieldFormulaEngine.resolveInputValues(rawValues, null, coreTableData(), path.substringAfterLast('/')) { result ->
+            runOnUiThread {
+                result.fold(
+                    onSuccess = { values ->
+                        setBusy(false)
+                        val preview = values.entries.filter { it.value.isNotBlank() }.take(8)
+                            .joinToString("\n") { "${it.key}: ${it.value}" }
+                            .ifBlank { "All fields are blank; the repository writer may only add an inferred date." }
+                        AlertDialog.Builder(this)
+                            .setTitle("Amend expense?")
+                            .setMessage("$preview\n\nCommit this change to ${path.substringAfterLast('/')}?")
+                            .setNegativeButton("No", null)
+                            .setPositiveButton("Yes") { _, _ -> mainViewModel.amend(settings, values) }
+                            .create().also { showDialog(it) }
+                    },
+                    onFailure = { error ->
+                        setBusy(false)
+                        Toast.makeText(this, "Formula error: ${error.message}", Toast.LENGTH_LONG).show()
+                    },
+                )
+            }
+        }
     }
 
     private fun collectFormValues(): LinkedHashMap<String, String> = linkedMapOf<String, String>().apply {
@@ -2080,7 +2496,9 @@ return Plot.plot({
         if (paginatedTableData.keys.isNotEmpty()) {
             val header = TableRow(this).apply {
                 setBackgroundColor(BLACK)
-                paginatedTableData.keys.forEach { addView(cell(it.uppercase(), header = true)) }
+                paginatedTableData.keys.forEach { key ->
+                    addView(cell(key.uppercase(), header = true, textColor = if (imaginaryKeys.any { it.equals(key, true) }) PRIMARY else WHITE))
+                }
                 addView(cell("", header = true))
             }
             addTableRow(header)
@@ -2242,15 +2660,25 @@ return Plot.plot({
     private fun editRow(row: DynamicRow) {
         if (selectedPath == null || requireToken() == null) return
         val editInputs = linkedMapOf<String, EditText>()
+        val imaginaryInputs = linkedMapOf<String, EditText>()
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), 0, dp(16), 0)
             setBackgroundColor(BLACK)
         }
-        currentData.keys.forEach { key ->
+        currentData.keys.filterNot { key -> imaginaryKeys.any { it.equals(key, true) } }.forEach { key ->
             val input = inputForKey(key, row.values[key].orEmpty(), currentData)
             editInputs[key] = input
-            form.addView(input, matchWidth())
+            form.addView(formulaInputRow(key, input), matchWidth())
+        }
+        val imaginaryDefinitions = imaginaryFieldsDraft.filter { it.enabled }
+        if (imaginaryDefinitions.isNotEmpty()) {
+            form.addView(infoText("Imaginary values · manual overrides").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(7))
+            imaginaryDefinitions.forEach { definition ->
+                val input = styledInput(definition.name).apply { setText(row.values[definition.name].orEmpty()) }
+                imaginaryInputs[definition.name] = input
+                form.addView(input, spacedMatchWidth(4))
+            }
         }
         val scroll = ScrollView(this).apply { addView(form, matchWidth()) }
         val dialog = AlertDialog.Builder(this)
@@ -2264,11 +2692,38 @@ return Plot.plot({
                 val values = linkedMapOf<String, String>().apply {
                     editInputs.forEach { (key, view) -> put(key, view.text.toString()) }
                 }
-                dialog.dismiss()
-                mainViewModel.updateRow(settings, row, values)
+                setBusy(true, "Evaluating field formulas…")
+                fieldFormulaEngine.resolveInputValues(values, row, coreTableData(), selectedPath?.substringAfterLast('/') ?: "current.json") { result ->
+                    runOnUiThread {
+                        result.fold(
+                            onSuccess = { resolved ->
+                                saveImaginaryManualValues(row, imaginaryInputs)
+                                dialog.dismiss()
+                                mainViewModel.updateRow(settings, row, resolved)
+                            },
+                            onFailure = { error ->
+                                setBusy(false)
+                                Toast.makeText(this, "Formula error: ${error.message}", Toast.LENGTH_LONG).show()
+                            },
+                        )
+                    }
+                }
             }
         }
         showDialog(dialog)
+    }
+
+    private fun saveImaginaryManualValues(row: DynamicRow, inputs: Map<String, EditText>) {
+        if (inputs.isEmpty()) return
+        val fileName = selectedPath?.substringAfterLast('/') ?: return
+        val storageKey = "$fileName#${row.originalIndex}"
+        imaginaryFieldsDraft = imaginaryFieldsDraft.map { definition ->
+            val input = inputs.entries.firstOrNull { it.key.equals(definition.name, true) }?.value ?: return@map definition
+            val nextValues = definition.manualValues.toMutableMap()
+            input.text.toString().takeIf { it.isNotBlank() }?.let { nextValues[storageKey] = it } ?: nextValues.remove(storageKey)
+            definition.copy(manualValues = nextValues)
+        }.toMutableList()
+        persistImaginaryFields("Imaginary row values saved.")
     }
 
     private fun confirmDeleteRow(row: DynamicRow) {
@@ -2692,6 +3147,116 @@ return Plot.plot({
         else -> String.format(Locale.US, "%.4f", value).trimEnd('0').trimEnd('.')
     }
 
+    private fun showFileScriptManager() {
+        var dialog: AlertDialog? = null
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            setBackgroundColor(BLACK)
+        }
+        list.addView(infoText("SQLite file scripts run against an ephemeral ALL_FILES table. __file is the JSON filename and __row is its source row index. The final SELECT result is written to a JSON file under ${settings.folder}/. Exvia metadata columns are stripped from the output.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+        list.addView(accordion("Built-in examples", initiallyOpen = false) { examples ->
+            BuiltinExamples.fileScripts.forEach { script ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                row.addView(TextView(this).apply {
+                    text = script.name
+                    setTextColor(WHITE)
+                    setPadding(dp(6), dp(5), dp(6), dp(5))
+                    AppFonts.apply(this, textScale = settings.textScale)
+                    setOnClickListener { dialog?.dismiss(); editFileScript(null, script) }
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(TextView(this).apply {
+                    text = "Run"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this, bold = true)
+                    setOnClickListener { dialog?.dismiss(); executeFileScript(script) }
+                }, LinearLayout.LayoutParams(dp(48), dp(32)))
+                examples.addView(row, matchWidth())
+            }
+        }, spacedMatchWidth(6))
+        list.addView(infoText("Saved scripts").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(4))
+        if (fileScriptsDraft.isEmpty()) list.addView(infoText("No saved file scripts.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+        fileScriptsDraft.forEach { script ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(TextView(this).apply {
+                text = script.name; setTextColor(WHITE); setPadding(dp(6), dp(5), dp(6), dp(5)); AppFonts.apply(this)
+                setOnClickListener { dialog?.dismiss(); executeFileScript(script) }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this)
+                setOnClickListener { dialog?.dismiss(); editFileScript(script) }
+            }, LinearLayout.LayoutParams(dp(48), dp(32)))
+            row.addView(TextView(this).apply {
+                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true)
+                setOnClickListener {
+                    fileScriptsDraft.removeAll { it.id == script.id }
+                    persistFileScripts("File script removed.")
+                    dialog?.dismiss(); showFileScriptManager()
+                }
+            }, LinearLayout.LayoutParams(dp(34), dp(32)))
+            list.addView(row, matchWidth())
+        }
+        list.addView(styledButton("+ New SQLite script").apply { setOnClickListener { dialog?.dismiss(); editFileScript(null, null) } }, spacedMatchWidth(5))
+        dialog = AlertDialog.Builder(this).setTitle("File SQLite scripts").setView(ScrollView(this).apply { addView(list, matchWidth()) }).setNegativeButton("Close", null).create()
+        showDialog(dialog!!)
+    }
+
+    private fun editFileScript(existing: FileScriptDefinition?, template: FileScriptDefinition? = null) {
+        val name = styledInput("file_script.name").apply { setText(existing?.name ?: template?.name.orEmpty()) }
+        val script = styledInput("file_script.sqlite").apply {
+            isSingleLine = false; minLines = 10; gravity = Gravity.TOP
+            setText(existing?.script ?: template?.script ?: "SELECT * FROM ALL_FILES;")
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0); setBackgroundColor(BLACK)
+            addView(infoText("The final statement must be SELECT or WITH … SELECT. CREATE TEMP VIEW / DROP VIEW may appear before it. Use -- @exact-schema with __file IN (...) when a merge must reject files whose columns differ.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(name, spacedMatchWidth(5)); addView(script, matchWidth())
+        }
+        val dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New SQLite file script" else "Edit ${existing.name}")
+            .setView(ScrollView(this).apply { addView(body, matchWidth()) }).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val n = name.text.toString().trim(); val sql = script.text.toString().trim()
+                if (n.isBlank()) { name.error = "Name is required"; return@setOnClickListener }
+                if (sql.isBlank()) { script.error = "SQLite script is required"; return@setOnClickListener }
+                val next = FileScriptDefinition(existing?.id ?: UUID.randomUUID().toString(), n, sql, true)
+                fileScriptsDraft = if (existing == null) (fileScriptsDraft + next).toMutableList()
+                else fileScriptsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
+                persistFileScripts("File script saved.")
+                dialog.dismiss(); showFileScriptManager()
+            }
+        }
+        showDialog(dialog)
+    }
+
+    private fun persistFileScripts(message: String) {
+        settings = settings.copy(fileScripts = fileScriptsDraft.toList())
+        settingsViewModel.saveFileScripts(settings)
+        statusText.text = message
+    }
+
+    private fun executeFileScript(definition: FileScriptDefinition) {
+        if (requireToken() == null) return
+        if (files.isEmpty()) { statusText.text = "There are no JSON files to query."; return }
+        val output = styledInput("Output JSON file").apply { setText("query-result.json"); selectAll() }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0)
+            addView(infoText("Execute '${definition.name}' over all selectable JSON files. If the output file already exists, its row array will be replaced after confirmation.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(output, matchWidth())
+        }
+        val dialog = AlertDialog.Builder(this).setTitle("Execute SQLite script?").setView(body)
+            .setNegativeButton("Cancel", null).setPositiveButton("Execute", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                var name = output.text.toString().trim()
+                if (name.isBlank()) { output.error = "Output file is required"; return@setOnClickListener }
+                if (!name.endsWith(".json", true)) name += ".json"
+                dialog.dismiss()
+                mainViewModel.executeFileScript(settings, definition.script, name)
+                showTab(Tab.FILES)
+            }
+        }
+        showDialog(dialog)
+    }
+
     private fun promptCreateFile() {
         if (requireToken() == null) return
         val suggested = YearMonth.now().plusMonths(1).format(DateTimeFormatter.ofPattern("yyyy-MM")) + ".json"
@@ -2773,7 +3338,7 @@ return Plot.plot({
         onClick: (() -> Unit)? = null,
     ): TextView = TextView(this).apply {
             text = textValue
-            setTextColor(if (header) MUTED else textColor)
+            setTextColor(if (header && textColor == WHITE) MUTED else textColor)
             setBackgroundColor(if (header) BLACK else backgroundColor)
             setPadding(dp(8), 3, dp(8), 3)
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
@@ -2841,6 +3406,7 @@ return Plot.plot({
         if (::amendButton.isInitialized) amendButton.isEnabled = !isBusy && selectedPath != null
         if (::createFileButton.isInitialized) createFileButton.isEnabled = !isBusy
         if (::removeFileButton.isInitialized) removeFileButton.isEnabled = !isBusy && selectedPath != null
+        if (::fileScriptButton.isInitialized) fileScriptButton.isEnabled = !isBusy
         if (::resyncButton.isInitialized) {
             resyncButton.isEnabled = !isBusy
             resyncButton.alpha = if (isBusy) 0.45f else 1f

@@ -88,6 +88,22 @@ class PlotWebRuntime(private val activity: Activity) {
         }
     }
 
+    fun evaluateFormulas(payload: JSONObject, callback: (Result<JSONObject>) -> Unit) {
+        val slot = metricSlot ?: createSlot().also { metricSlot = it }
+        execute(slot, "window.ExviaRuntime.evaluateFormulaBatch(${payload});") { encoded ->
+            try {
+                val decoded = decodeEvaluateResult(encoded)
+                val result = JSONObject(decoded)
+                if (!result.optBoolean("ok")) {
+                    throw IllegalArgumentException(result.optString("error", "Field formula evaluation failed"))
+                }
+                callback(Result.success(result))
+            } catch (error: Exception) {
+                callback(Result.failure(error))
+            }
+        }
+    }
+
     fun destroy() {
         destroyed = true
         allSlots.toList().forEach(::destroySlot)

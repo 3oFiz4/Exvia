@@ -14,6 +14,7 @@ import xyz.x3ofiz4.exvia.domain.repository.WorkspaceSnapshot
 import xyz.x3ofiz4.exvia.domain.service.SqlLikeFilter
 import xyz.x3ofiz4.exvia.domain.service.TableStyleEngine
 import java.util.UUID
+import java.util.ArrayDeque
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -25,10 +26,23 @@ class MainViewModel(
     val state = ObservableState(MainUiState())
     val effects = EventStream<MainEffect>()
     private var automaticMappings: List<TableStyleRule> = emptyList()
+    private var coreData: TableData = TableData(emptyList(), emptyList(), null, null, null, null)
+
+    /** Compact command history: only the changed row is stored, never a whole table snapshot. */
+    private data class RowHistoryEntry(
+        val path: String,
+        val index: Int,
+        val before: Map<String, String>?,
+        val after: Map<String, String>?,
+        val label: String,
+    )
+    private val undoStack = ArrayDeque<RowHistoryEntry>()
+    private val redoStack = ArrayDeque<RowHistoryEntry>()
 
     fun loadInitial(settings: RepoSettings) = launch("Loading Exvia data…", "Initial load failed") {
         automaticMappings = settings.colorMappings
         val snapshot = repository.loadInitial(settings)
+        clearHistory()
         publishSnapshot(snapshot, initialStatus(snapshot))
     }
 
@@ -38,6 +52,7 @@ class MainViewModel(
     ) {
         automaticMappings = settings.colorMappings
         val snapshot = repository.synchronize(settings)
+        clearHistory()
         publishSnapshot(snapshot, if (snapshot.selectedPath == null) {
             "Re-sync complete. No .json files found in ${settings.folder}/."
         } else {
@@ -51,6 +66,7 @@ class MainViewModel(
     ) {
         automaticMappings = settings.colorMappings
         val snapshot = repository.loadSelected(settings, state.value.files, path, forceNetwork)
+        clearHistory()
         publishSnapshot(snapshot, "Loaded ${snapshot.tableData.rows.size} row(s) from ${path.substringAfterLast('/')}.")
     }
 
@@ -111,14 +127,42 @@ class MainViewModel(
     fun replaceSchema(settings: RepoSettings, newKeys: List<String>) {
         automaticMappings = settings.colorMappings
         val current = state.value
-        val source = current.sourceData.copy(
+        val source = coreData.copy(
             keys = newKeys,
             dateKey = settings.detectDateKey(newKeys),
             moneyKey = settings.detectMoneyKey(newKeys),
             tickerKey = settings.detectTickerKey(newKeys),
             tagsKey = settings.detectTagsKey(newKeys),
         )
-        publishSource(source, current.status)
+        coreData = source
+        publishSource(source, current.status, emptySet())
+    }
+
+    fun applyImaginaryValues(
+        settings: RepoSettings,
+        fieldValues: Map<String, Map<Int, String>>,
+    ) {
+        val activeFields = settings.imaginaryFields
+            .filter { it.enabled && it.name.isNotBlank() }
+            .map { it.name }
+            .distinctBy { it.lowercase() }
+        val keys = (coreData.keys + activeFields).distinctBy { it.lowercase() }
+        val rows = coreData.rows.map { row ->
+            val next = LinkedHashMap(row.values)
+            activeFields.forEach { field ->
+                fieldValues[field]?.get(row.originalIndex)?.takeIf { it.isNotBlank() }?.let { next[field] = it }
+            }
+            row.copy(values = next)
+        }
+        val source = coreData.copy(
+            keys = keys,
+            rows = rows,
+            dateKey = settings.detectDateKey(keys),
+            moneyKey = settings.detectMoneyKey(keys),
+            tickerKey = settings.detectTickerKey(keys),
+            tagsKey = settings.detectTagsKey(keys),
+        )
+        publishSource(source, state.value.status, activeFields.toSet())
     }
 
     fun amend(settings: RepoSettings, values: Map<String, String>) {
@@ -129,35 +173,88 @@ class MainViewModel(
         launch("Committing to ${path.substringAfterLast('/')}…", "Amend failed") {
             automaticMappings = settings.colorMappings
             val (snapshot, date) = repository.appendRow(settings, state.value.files, path, values)
+            val appended = snapshot.tableData.rows.maxByOrNull { it.originalIndex }
+            if (appended != null) recordHistory(
+                RowHistoryEntry(path, appended.originalIndex, null, LinkedHashMap(appended.values), "Amend"),
+                settings.undoHistoryLimit,
+            )
             publishSnapshot(snapshot, "Committed and cached at $date.")
         }
     }
 
     fun updateRow(settings: RepoSettings, row: DynamicRow, values: Map<String, String>) {
         val path = state.value.selectedPath ?: return
+        val before = coreData.rows.firstOrNull { it.originalIndex == row.originalIndex }?.values?.let(::LinkedHashMap)
+            ?: LinkedHashMap(row.values)
         launch("Updating row…", "Update failed") {
             automaticMappings = settings.colorMappings
-            publishSnapshot(repository.updateRow(settings, state.value.files, path, row, values), "Row updated and cached.")
+            val snapshot = repository.updateRow(settings, state.value.files, path, row, values)
+            val after = snapshot.tableData.rows.firstOrNull { it.originalIndex == row.originalIndex }?.values?.let(::LinkedHashMap)
+            if (after != null) recordHistory(RowHistoryEntry(path, row.originalIndex, before, after, "Edit row"), settings.undoHistoryLimit)
+            publishSnapshot(snapshot, "Row updated and cached.")
+        }
+    }
+
+    fun removeField(settings: RepoSettings, fieldName: String) {
+        val path = state.value.selectedPath ?: return
+        val rows: List<Map<String, String>> = coreData.rows.map { row ->
+            LinkedHashMap(row.values.filterKeys { !it.equals(fieldName, ignoreCase = true) })
+        }
+        launch("Removing field $fieldName…", "Remove field failed") {
+            automaticMappings = settings.colorMappings
+            val snapshot = repository.replaceRows(
+                settings = settings,
+                files = state.value.files,
+                path = path,
+                rows = rows,
+                message = "Remove field $fieldName",
+            )
+            clearHistory()
+            publishSnapshot(snapshot, "Field '$fieldName' removed from the JSON file and cache.")
         }
     }
 
     fun deleteRow(settings: RepoSettings, row: DynamicRow) {
         val path = state.value.selectedPath ?: return
+        val before = coreData.rows.firstOrNull { it.originalIndex == row.originalIndex }?.values?.let(::LinkedHashMap)
+            ?: LinkedHashMap(row.values)
         launch("Removing row…", "Remove row failed") {
             automaticMappings = settings.colorMappings
-            publishSnapshot(repository.deleteRow(settings, state.value.files, path, row), "Row removed and cached.")
+            val snapshot = repository.deleteRow(settings, state.value.files, path, row)
+            recordHistory(RowHistoryEntry(path, row.originalIndex, before, null, "Delete row"), settings.undoHistoryLimit)
+            publishSnapshot(snapshot, "Row removed and cached.")
         }
+    }
+
+    fun undo(settings: RepoSettings) {
+        val entry = undoStack.lastOrNull() ?: return
+        applyHistory(settings, entry, undo = true)
+    }
+
+    fun redo(settings: RepoSettings) {
+        val entry = redoStack.lastOrNull() ?: return
+        applyHistory(settings, entry, undo = false)
+    }
+
+    fun executeFileScript(settings: RepoSettings, script: String, outputFile: String) = launch(
+        "Executing SQLite file script…", "File script failed",
+    ) {
+        val snapshot = repository.executeFileScript(settings, state.value.files, script, outputFile)
+        clearHistory()
+        publishSnapshot(snapshot, "SQLite script wrote ${snapshot.tableData.rows.size} row(s) to ${snapshot.selectedPath?.substringAfterLast('/')}.")
     }
 
     fun createFile(settings: RepoSettings, name: String) = launch("Creating file…", "Create file failed") {
         automaticMappings = settings.colorMappings
         val snapshot = repository.createFile(settings, name)
+        clearHistory()
         publishSnapshot(snapshot, "Created and selected ${snapshot.selectedPath?.substringAfterLast('/')}.")
     }
 
     fun deleteFile(settings: RepoSettings, file: RepoFile) = launch("Removing ${file.name}…", "Remove file failed") {
         automaticMappings = settings.colorMappings
         val snapshot = repository.deleteFile(settings, state.value.files, file)
+        clearHistory()
         publishSnapshot(snapshot, if (snapshot.selectedPath == null) {
             "Removed ${file.name}. No JSON files remain."
         } else {
@@ -165,7 +262,52 @@ class MainViewModel(
         })
     }
 
+    private fun recordHistory(entry: RowHistoryEntry, configuredLimit: Int) {
+        undoStack.addLast(entry)
+        val limit = configuredLimit.coerceIn(1, 50)
+        while (undoStack.size > limit) undoStack.removeFirst()
+        redoStack.clear()
+    }
+
+    private fun clearHistory() {
+        undoStack.clear()
+        redoStack.clear()
+        state.update { it.copy(canUndo = false, canRedo = false) }
+    }
+
+    private fun applyHistory(settings: RepoSettings, entry: RowHistoryEntry, undo: Boolean) {
+        val path = state.value.selectedPath ?: return
+        if (path != entry.path) {
+            effects.emit(MainEffect.ToastMessage("Undo/Redo history belongs to another file."))
+            return
+        }
+        launch(if (undo) "Undoing ${entry.label}…" else "Redoing ${entry.label}…", if (undo) "Undo failed" else "Redo failed") {
+            val rows = coreData.rows.sortedBy { it.originalIndex }.map { LinkedHashMap(it.values) }.toMutableList()
+            val index = entry.index.coerceIn(0, rows.size)
+            val target = if (undo) entry.before else entry.after
+            val opposite = if (undo) entry.after else entry.before
+            when {
+                target == null && opposite != null -> {
+                    require(index < rows.size) { "History row no longer exists at index ${entry.index}." }
+                    rows.removeAt(index)
+                }
+                target != null && opposite == null -> rows.add(index, LinkedHashMap(target))
+                target != null -> {
+                    require(index < rows.size) { "History row no longer exists at index ${entry.index}." }
+                    rows[index] = LinkedHashMap(target)
+                }
+            }
+            val snapshot = repository.replaceRows(
+                settings, state.value.files, path, rows,
+                if (undo) "Undo Exvia table change: ${entry.label}" else "Redo Exvia table change: ${entry.label}",
+            )
+            if (undo) { undoStack.removeLast(); redoStack.addLast(entry) } else { redoStack.removeLast(); undoStack.addLast(entry) }
+            publishSnapshot(snapshot, if (undo) "Undo complete: ${entry.label}." else "Redo complete: ${entry.label}.")
+        }
+    }
+
     private fun publishSnapshot(snapshot: WorkspaceSnapshot, status: String) {
+        coreData = snapshot.tableData
         val current = state.value
         val filtered = filter(snapshot.tableData, current.filterEnabled, current.filterQuery)
         val next = current.copy(
@@ -174,6 +316,9 @@ class MainViewModel(
             sourceData = snapshot.tableData,
             visibleData = filtered.first,
             filterError = filtered.second,
+            imaginaryKeys = emptySet(),
+            canUndo = undoStack.isNotEmpty(),
+            canRedo = redoStack.isNotEmpty(),
             busy = false,
             status = status,
             revision = current.revision + 1,
@@ -181,13 +326,14 @@ class MainViewModel(
         state.set(next.copy(tableStyles = resolveStyles(next.visibleData, next)))
     }
 
-    private fun publishSource(source: TableData, status: String) {
+    private fun publishSource(source: TableData, status: String, imaginaryKeys: Set<String> = state.value.imaginaryKeys) {
         val current = state.value
         val filtered = filter(source, current.filterEnabled, current.filterQuery)
         val next = current.copy(
             sourceData = source,
             visibleData = filtered.first,
             filterError = filtered.second,
+            imaginaryKeys = imaginaryKeys,
             status = status,
             revision = current.revision + 1,
         )

@@ -5,6 +5,7 @@ import xyz.x3ofiz4.exvia.data.local.ExviaFileCache
 import xyz.x3ofiz4.exvia.data.local.SelectedFileStore
 import xyz.x3ofiz4.exvia.data.local.TokenStore
 import xyz.x3ofiz4.exvia.data.remote.GitHubApi
+import xyz.x3ofiz4.exvia.data.sql.FileSqlScriptEngine
 import xyz.x3ofiz4.exvia.domain.model.table.DynamicRow
 import xyz.x3ofiz4.exvia.domain.model.repository.RepoFile
 import xyz.x3ofiz4.exvia.domain.model.settings.RepoSettings
@@ -128,6 +129,18 @@ class GitHubExpenseRepository(
         return refreshedMutation(settings, api, files, path)
     }
 
+    override fun replaceRows(
+        settings: RepoSettings,
+        files: List<RepoFile>,
+        path: String,
+        rows: List<Map<String, String>>,
+        message: String,
+    ): WorkspaceSnapshot {
+        val api = GitHubApi(requireToken(settings), settings)
+        api.replaceRows(path, rows, message)
+        return refreshedMutation(settings, api, files, path)
+    }
+
     override fun createFile(settings: RepoSettings, name: String): WorkspaceSnapshot {
         val api = GitHubApi(requireToken(settings), settings)
         val created = api.createExpenseFile(name)
@@ -160,6 +173,29 @@ class GitHubExpenseRepository(
         }
         selectedFileStore.save(next?.path)
         return WorkspaceSnapshot(loadedFiles, next?.path, data, if (next == null) DataSource.EMPTY else DataSource.CACHE)
+    }
+
+    override fun executeFileScript(
+        settings: RepoSettings,
+        files: List<RepoFile>,
+        script: String,
+        outputFile: String,
+    ): WorkspaceSnapshot {
+        val api = GitHubApi(requireToken(settings), settings)
+        val inputs = files.map { file ->
+            val table = cache.loadFile(settings, file.path)?.let { cached ->
+                try { api.parseCachedTable(cached.text) } catch (_: Exception) { null }
+            } ?: api.fetchTableFile(file.path).also { cache.saveFile(settings, it.first) }.second
+            FileSqlScriptEngine.Input(file, table)
+        }
+        val result = FileSqlScriptEngine().execute(inputs, script)
+        val created = api.upsertExpenseRows(outputFile, result.rows, "Execute Exvia SQLite file script: $outputFile")
+        val loadedFiles = api.listExpenseFiles()
+        val fetched = api.fetchTableFile(created.path)
+        cache.saveFiles(settings, loadedFiles)
+        cache.saveFile(settings, fetched.first)
+        selectedFileStore.save(created.path)
+        return WorkspaceSnapshot(loadedFiles, created.path, fetched.second, DataSource.NETWORK)
     }
 
     private fun refreshedMutation(

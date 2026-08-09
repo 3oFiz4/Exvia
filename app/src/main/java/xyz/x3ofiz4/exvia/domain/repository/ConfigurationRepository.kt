@@ -16,7 +16,12 @@ interface ConfigurationRepository {
     fun repoInitializationAsked(): Boolean
     fun setRepoInitializationAsked(asked: Boolean)
     fun synchronizeConfiguration(settings: RepoSettings, snippets: List<FilterSnippet>, developerMode: Boolean)
+    fun synchronizeFilterSnippets(settings: RepoSettings, snippets: List<FilterSnippet>)
     fun synchronizeTableRules(settings: RepoSettings)
+    fun synchronizeCustomMetrics(settings: RepoSettings)
+    fun synchronizeCustomPlots(settings: RepoSettings)
+    fun synchronizeFileScripts(settings: RepoSettings)
+    fun synchronizeImaginaryFields(settings: RepoSettings)
     fun createRepository(settings: RepoSettings, username: String, repo: String, branch: String, folder: String, defaultFile: String): RepoSettings
     fun submitReport(settings: RepoSettings, title: String, description: String, label: String, classification: String, developerMode: Boolean): String
 }

@@ -48,6 +48,36 @@ data class CustomPlotDefinition(
     val enabled: Boolean = true,
 )
 
+data class FileScriptDefinition(
+    val id: String,
+    val name: String,
+    val script: String,
+    val enabled: Boolean = true,
+)
+
+data class ImaginaryFieldSnippet(
+    val id: String,
+    val name: String,
+    val expression: String,
+    val description: String = "",
+)
+
+
+/**
+ * A computed field that exists only in Exvia's effective table clone. It never
+ * mutates the underlying expense JSON schema. Blank formula results are omitted
+ * from the row, which keeps the overlay sparse.
+ */
+data class ImaginaryFieldDefinition(
+    val id: String,
+    val name: String,
+    /** Plain value, =JavaScript, or ==SQLite scalar expression. Blank means manual-only. */
+    val expression: String = "",
+    /** Sparse per-file/per-row manual overrides. Keys are `<file>#<originalIndex>`. */
+    val manualValues: Map<String, String> = emptyMap(),
+    val enabled: Boolean = true,
+)
+
 data class NamedUiTheme(
     val id: String,
     val name: String,

@@ -22,6 +22,8 @@ interface ExpenseRepository {
     fun appendRow(settings: RepoSettings, files: List<RepoFile>, path: String, values: Map<String, String>): Pair<WorkspaceSnapshot, String>
     fun updateRow(settings: RepoSettings, files: List<RepoFile>, path: String, row: DynamicRow, values: Map<String, String>): WorkspaceSnapshot
     fun deleteRow(settings: RepoSettings, files: List<RepoFile>, path: String, row: DynamicRow): WorkspaceSnapshot
+    fun replaceRows(settings: RepoSettings, files: List<RepoFile>, path: String, rows: List<Map<String, String>>, message: String): WorkspaceSnapshot
     fun createFile(settings: RepoSettings, name: String): WorkspaceSnapshot
     fun deleteFile(settings: RepoSettings, files: List<RepoFile>, file: RepoFile): WorkspaceSnapshot
+    fun executeFileScript(settings: RepoSettings, files: List<RepoFile>, script: String, outputFile: String): WorkspaceSnapshot
 }

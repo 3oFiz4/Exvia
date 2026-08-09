@@ -28,9 +28,15 @@ class GitHubApi(
     private val settings: RepoSettings,
 ) {
     companion object {
-        const val CONFIG_FILE_NAME = "config.json"
-        const val CONFIG_PATH = ".exvia/config.json"
-        const val TABLE_RULES_PATH = ".exvia/table-rules.json"
+        const val CONFIG_FILE_NAME = ".exvia-settings.json"
+        const val CONFIG_PATH = ".exvia/.exvia-settings.json"
+        const val FILTER_SNIPPETS_PATH = ".exvia/filtering-snippets.json"
+        const val FLAGGING_SNIPPETS_PATH = ".exvia/flagging-snippets.json"
+        const val COLOR_MAPPINGS_PATH = ".exvia/color-mappings.json"
+        const val CUSTOM_METRICS_PATH = ".exvia/custom-metrics.json"
+        const val CUSTOM_PLOTS_PATH = ".exvia/custom-plots.json"
+        const val FILE_SCRIPTS_PATH = ".exvia/file-scripts.json"
+        const val IMAGINARY_FIELDS_PATH = ".exvia/imaginary-fields.json"
     }
     private data class EditableDocument(val root: Any, val items: JSONArray)
 
@@ -184,6 +190,44 @@ class GitHubApi(
         val dateKey = settings.detectDateKey(row.values.keys.toList())
         val label = dateKey?.let { row.values[it] }.orEmpty().ifBlank { "row ${index + 1}" }
         putFile(path, serialize(document.root), existing.sha, "Remove expense at $label")
+    }
+
+    /** Replaces the row array while preserving the current root shape and inferred scalar types. */
+    fun replaceRows(path: String, rows: List<Map<String, String>>, message: String) {
+        val existing = getFile(path)
+        val document = parseEditableDocument(existing.text)
+        val typeSource = JSONArray(document.items.toString())
+        val keys = rows.flatMap { it.keys }.distinct()
+        val tagsKey = settings.detectTagsKey(keys)
+        while (document.items.length() > 0) document.items.remove(document.items.length() - 1)
+        rows.forEach { values ->
+            val item = JSONObject()
+            keys.forEach { key ->
+                val value = values[key]?.trim().orEmpty()
+                if (value.isNotBlank()) putTypedValue(item, typeSource, key, value, tagsKey)
+            }
+            document.items.put(item)
+        }
+        putFile(path, serialize(document.root), existing.sha, message)
+    }
+
+    /** Creates or replaces an expense JSON file using a query result. */
+    fun upsertExpenseRows(fileNameInput: String, rows: List<Map<String, String>>, message: String): RepoFile {
+        val fileName = normalizeFileName(fileNameInput)
+        val path = settings.pathFor(fileName)
+        val existing = try { getFile(path) } catch (e: GitHubHttpException) { if (e.statusCode == 404) null else throw e }
+        if (existing == null) {
+            val array = JSONArray()
+            rows.forEach { values ->
+                val obj = JSONObject()
+                values.forEach { (key, value) -> if (value.isNotBlank()) obj.put(key, value) }
+                array.put(obj)
+            }
+            putFile(path, array.toString(2) + "\n", null, message)
+        } else {
+            replaceRows(path, rows, message)
+        }
+        return listExpenseFiles().first { it.name.equals(fileName, ignoreCase = true) }
     }
 
     fun createExpenseFile(fileNameInput: String): RepoFile {

@@ -112,10 +112,12 @@ class SettingsStore(context: Context) {
             financeColumns = parseColumnList(prefs.getString(KEY_FINANCE_COLUMNS, "price") ?: "price"),
             customMetrics = parseCustomMetrics(prefs.getString(KEY_CUSTOM_METRICS, "[]") ?: "[]"),
             customPlots = parseCustomPlots(prefs.getString(KEY_CUSTOM_PLOTS, "[]") ?: "[]"),
-            reportRepo = "Exvia",
+            fileScripts = parseFileScripts(prefs.getString(KEY_FILE_SCRIPTS, "[]") ?: "[]"),
+            imaginaryFields = parseImaginaryFields(prefs.getString(KEY_IMAGINARY_FIELDS, "[]") ?: "[]"),
             uiScale = prefs.getString(KEY_UI_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.60) ?: 1.0,
             textScale = prefs.getString(KEY_TEXT_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.80) ?: 1.0,
             rowsPerPage = prefs.getString(KEY_ROWS_PER_PAGE, "25")?.toIntOrNull()?.coerceIn(1, 500) ?: 25,
+            undoHistoryLimit = prefs.getString(KEY_UNDO_HISTORY_LIMIT, "50")?.toIntOrNull()?.coerceIn(1, 50) ?: 50,
             themePreset = preset,
             palette = palette,
             plotTheme = plotTheme,
@@ -145,10 +147,12 @@ class SettingsStore(context: Context) {
             .putString(KEY_FINANCE_COLUMNS, settings.financeColumns.joinToString(", "))
             .putString(KEY_CUSTOM_METRICS, customMetricsToJson(settings.customMetrics))
             .putString(KEY_CUSTOM_PLOTS, customPlotsToJson(settings.customPlots))
-            .putString(KEY_REPORT_REPO, "Exvia")
+            .putString(KEY_FILE_SCRIPTS, fileScriptsToJson(settings.fileScripts))
+            .putString(KEY_IMAGINARY_FIELDS, imaginaryFieldsToJson(settings.imaginaryFields))
             .putString(KEY_UI_SCALE, settings.uiScale.toString())
             .putString(KEY_TEXT_SCALE, settings.textScale.toString())
             .putString(KEY_ROWS_PER_PAGE, settings.rowsPerPage.coerceIn(1, 500).toString())
+            .putString(KEY_UNDO_HISTORY_LIMIT, settings.undoHistoryLimit.coerceIn(1, 50).toString())
             .putString(KEY_THEME_PRESET, settings.themePreset.id)
             .putString(KEY_PRIMARY, settings.palette.primary)
             .putString(KEY_SECONDARY, settings.palette.secondary)
@@ -213,13 +217,15 @@ class SettingsStore(context: Context) {
         private const val KEY_FINANCE_COLUMNS = "finance_columns"
         private const val KEY_CUSTOM_METRICS = "custom_metrics"
         private const val KEY_CUSTOM_PLOTS = "custom_plots"
+        private const val KEY_IMAGINARY_FIELDS = "imaginary_fields"
         private const val KEY_FILTER_SNIPPETS = "filter_snippets"
         private const val KEY_REPO_INIT_ASKED = "repo_initialization_asked"
         private const val KEY_DEVELOPER_MODE = "developer_mode"
-        private const val KEY_REPORT_REPO = "report_repo"
         private const val KEY_UI_SCALE = "ui_scale"
         private const val KEY_TEXT_SCALE = "text_scale"
         private const val KEY_ROWS_PER_PAGE = "rows_per_page"
+        private const val KEY_UNDO_HISTORY_LIMIT = "undo_history_limit"
+        private const val KEY_FILE_SCRIPTS = "file_scripts"
         private const val KEY_THEME_PRESET = "theme_preset"
         private const val KEY_PRIMARY = "theme_primary"
         private const val KEY_SECONDARY = "theme_secondary"
@@ -270,7 +276,7 @@ class SettingsStore(context: Context) {
             filterSnippets: List<FilterSnippet>,
             developerMode: Boolean,
         ): String = JSONObject().apply {
-            put("format", "exvia-config-v2")
+            put("format", "exvia-settings-v3")
             put("developerMode", developerMode)
             put("github", JSONObject().apply {
                 put("owner", settings.owner)
@@ -294,6 +300,7 @@ class SettingsStore(context: Context) {
                 put("uiScale", settings.uiScale)
                 put("textScale", settings.textScale)
                 put("rowsPerPage", settings.rowsPerPage)
+                put("undoHistoryLimit", settings.undoHistoryLimit)
             })
             put("theme", JSONObject().apply {
                 put("preset", settings.themePreset.id)
@@ -326,11 +333,50 @@ class SettingsStore(context: Context) {
                 put("tooltipBorder", settings.plotTheme.tooltipBorder)
                 put("customThemes", JSONArray(customPlotThemesToJson(settings.customPlotThemes)))
             })
-            put("customMetrics", JSONArray(customMetricsToJson(settings.customMetrics)))
-            put("customPlots", JSONArray(customPlotsToJson(settings.customPlots)))
-            put("filterSnippets", JSONArray(filterSnippetsToJson(filterSnippets)))
-            put("flaggingRules", JSONArray(tableStyleRulesToJson(settings.flaggingRules)))
-            put("colorMappings", JSONArray(tableStyleRulesToJson(settings.colorMappings)))
+            put("resources", JSONObject().apply {
+                put("filteringSnippets", ".exvia/filtering-snippets.json")
+                put("flaggingSnippets", ".exvia/flagging-snippets.json")
+                put("colorMappings", ".exvia/color-mappings.json")
+                put("customMetrics", ".exvia/custom-metrics.json")
+                put("customPlots", ".exvia/custom-plots.json")
+                put("fileScripts", ".exvia/file-scripts.json")
+                put("imaginaryFields", ".exvia/imaginary-fields.json")
+            })
+        }.toString(2) + "\n"
+
+        fun filterSnippetsFileJson(items: List<FilterSnippet>): String = JSONObject().apply {
+            put("format", "exvia-filtering-snippets-v1")
+            put("items", JSONArray(filterSnippetsToJson(items)))
+        }.toString(2) + "\n"
+
+        fun flaggingRulesFileJson(items: List<TableStyleRule>): String = JSONObject().apply {
+            put("format", "exvia-flagging-snippets-v1")
+            put("items", JSONArray(tableStyleRulesToJson(items)))
+        }.toString(2) + "\n"
+
+        fun colorMappingsFileJson(items: List<TableStyleRule>): String = JSONObject().apply {
+            put("format", "exvia-color-mappings-v1")
+            put("items", JSONArray(tableStyleRulesToJson(items)))
+        }.toString(2) + "\n"
+
+        fun customMetricsFileJson(items: List<CustomMetricDefinition>): String = JSONObject().apply {
+            put("format", "exvia-custom-metrics-v1")
+            put("items", JSONArray(customMetricsToJson(items)))
+        }.toString(2) + "\n"
+
+        fun customPlotsFileJson(items: List<CustomPlotDefinition>): String = JSONObject().apply {
+            put("format", "exvia-custom-plots-v1")
+            put("items", JSONArray(customPlotsToJson(items)))
+        }.toString(2) + "\n"
+
+        fun fileScriptsFileJson(items: List<FileScriptDefinition>): String = JSONObject().apply {
+            put("format", "exvia-file-scripts-v1")
+            put("items", JSONArray(fileScriptsToJson(items)))
+        }.toString(2) + "\n"
+
+        fun imaginaryFieldsFileJson(items: List<ImaginaryFieldDefinition>): String = JSONObject().apply {
+            put("format", "exvia-imaginary-fields-v1")
+            put("items", JSONArray(imaginaryFieldsToJson(items)))
         }.toString(2) + "\n"
 
         fun tableRulesToJson(settings: RepoSettings): String = JSONObject().apply {
@@ -341,6 +387,64 @@ class SettingsStore(context: Context) {
 
         fun parseColumnList(text: String): List<String> = text.split(',', '\n')
             .map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+
+        private fun parseFileScripts(text: String): List<FileScriptDefinition> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim()
+                if (name.isBlank()) return@mapNotNull null
+                FileScriptDefinition(
+                    id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                    name = name,
+                    script = obj.optString("script"),
+                    enabled = obj.optBoolean("enabled", true),
+                )
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun fileScriptsToJson(items: List<FileScriptDefinition>): String = JSONArray().apply {
+            items.forEach { item -> put(JSONObject().apply {
+                put("id", item.id)
+                put("name", item.name)
+                put("script", item.script)
+                put("enabled", item.enabled)
+            }) }
+        }.toString()
+
+        private fun parseImaginaryFields(text: String): List<ImaginaryFieldDefinition> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim()
+                if (name.isBlank()) return@mapNotNull null
+                val manual = linkedMapOf<String, String>()
+                obj.optJSONObject("manualValues")?.let { values ->
+                    val iterator = values.keys()
+                    while (iterator.hasNext()) {
+                        val key = iterator.next()
+                        manual[key] = values.optString(key)
+                    }
+                }
+                ImaginaryFieldDefinition(
+                    id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                    name = name,
+                    expression = obj.optString("expression"),
+                    manualValues = manual,
+                    enabled = obj.optBoolean("enabled", true),
+                )
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun imaginaryFieldsToJson(items: List<ImaginaryFieldDefinition>): String = JSONArray().apply {
+            items.forEach { item -> put(JSONObject().apply {
+                put("id", item.id)
+                put("name", item.name)
+                put("expression", item.expression)
+                put("manualValues", JSONObject(item.manualValues))
+                put("enabled", item.enabled)
+            }) }
+        }.toString()
 
         private fun parseCustomUiThemes(text: String): List<NamedUiTheme> = try {
             val arr = JSONArray(text)

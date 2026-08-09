@@ -3,7 +3,7 @@ package xyz.x3ofiz4.exvia.presentation.settings
 
 import xyz.x3ofiz4.exvia.core.observable.EventStream
 import xyz.x3ofiz4.exvia.core.observable.ObservableState
-import xyz.x3ofiz4.exvia.domain.model.custom.FilterSnippet
+import xyz.x3ofiz4.exvia.domain.model.custom.*
 import xyz.x3ofiz4.exvia.domain.model.settings.RepoSettings
 import xyz.x3ofiz4.exvia.domain.repository.ConfigurationRepository
 import java.util.concurrent.ExecutorService
@@ -35,8 +35,8 @@ class SettingsViewModel(
         val current = state.value
         if (!current.hasToken || !current.settings.isConfigured()) return
         launch("Synchronizing filtering snippets…", "Filtering snippets saved locally, but GitHub sync failed") {
-            repository.synchronizeConfiguration(current.settings, snippets, current.developerMode)
-            effects.emit(SettingsEffect.TableRulesSaved("Filtering snippets synchronized to .exvia/config.json."))
+            repository.synchronizeFilterSnippets(current.settings, snippets)
+            effects.emit(SettingsEffect.TableRulesSaved("Filtering snippets synchronized to .exvia/filtering-snippets.json."))
         }
     }
 
@@ -49,7 +49,59 @@ class SettingsViewModel(
         }
         launch("Synchronizing table rules…", "Table rules saved locally, but GitHub sync failed") {
             repository.synchronizeTableRules(next)
-            effects.emit(SettingsEffect.TableRulesSaved("Table rules synchronized to .exvia/table-rules.json."))
+            effects.emit(SettingsEffect.TableRulesSaved("Flagging snippets and Color Mapping synchronized under .exvia/."))
+        }
+    }
+
+    fun saveCustomMetrics(next: RepoSettings) {
+        repository.saveTableRulesLocal(next)
+        state.update { it.copy(settings = next) }
+        if (!state.value.hasToken || !next.isConfigured()) {
+            effects.emit(SettingsEffect.TableRulesSaved("Custom metrics saved locally. GitHub sync needs a PAT and configured repository."))
+            return
+        }
+        launch("Synchronizing custom metrics…", "Custom metrics saved locally, but GitHub sync failed") {
+            repository.synchronizeCustomMetrics(next)
+            effects.emit(SettingsEffect.TableRulesSaved("Custom metrics synchronized to .exvia/custom-metrics.json."))
+        }
+    }
+
+    fun saveCustomPlots(next: RepoSettings) {
+        repository.saveTableRulesLocal(next)
+        state.update { it.copy(settings = next) }
+        if (!state.value.hasToken || !next.isConfigured()) {
+            effects.emit(SettingsEffect.TableRulesSaved("Custom plots saved locally. GitHub sync needs a PAT and configured repository."))
+            return
+        }
+        launch("Synchronizing custom plots…", "Custom plots saved locally, but GitHub sync failed") {
+            repository.synchronizeCustomPlots(next)
+            effects.emit(SettingsEffect.TableRulesSaved("Custom plots synchronized to .exvia/custom-plots.json."))
+        }
+    }
+
+    fun saveFileScripts(next: RepoSettings) {
+        repository.saveTableRulesLocal(next)
+        state.update { it.copy(settings = next) }
+        if (!state.value.hasToken || !next.isConfigured()) {
+            effects.emit(SettingsEffect.TableRulesSaved("File scripts saved locally. GitHub sync needs a PAT and configured repository."))
+            return
+        }
+        launch("Synchronizing file scripts…", "File scripts saved locally, but GitHub sync failed") {
+            repository.synchronizeFileScripts(next)
+            effects.emit(SettingsEffect.TableRulesSaved("File scripts synchronized to .exvia/file-scripts.json."))
+        }
+    }
+
+    fun saveImaginaryFields(next: RepoSettings) {
+        repository.saveTableRulesLocal(next)
+        state.update { it.copy(settings = next) }
+        if (!state.value.hasToken || !next.isConfigured()) {
+            effects.emit(SettingsEffect.TableRulesSaved("Imaginary fields saved locally. GitHub sync needs a PAT and configured repository."))
+            return
+        }
+        launch("Synchronizing imaginary fields…", "Imaginary fields saved locally, but GitHub sync failed") {
+            repository.synchronizeImaginaryFields(next)
+            effects.emit(SettingsEffect.TableRulesSaved("Imaginary fields synchronized to .exvia/imaginary-fields.json."))
         }
     }
 
@@ -64,7 +116,13 @@ class SettingsViewModel(
         }
         launch("Saving settings and synchronizing configuration…", "Settings saved locally, but config sync failed") {
             repository.synchronizeConfiguration(next, snippets, developerMode)
-            effects.emit(SettingsEffect.Reload("Settings saved and synchronized."))
+            repository.synchronizeFilterSnippets(next, snippets)
+            repository.synchronizeTableRules(next)
+            repository.synchronizeCustomMetrics(next)
+            repository.synchronizeCustomPlots(next)
+            repository.synchronizeFileScripts(next)
+            repository.synchronizeImaginaryFields(next)
+            effects.emit(SettingsEffect.Reload("Settings and Exvia workspace resources synchronized under .exvia/."))
         }
     }
 

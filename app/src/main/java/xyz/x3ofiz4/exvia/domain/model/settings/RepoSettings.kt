@@ -2,6 +2,7 @@ package xyz.x3ofiz4.exvia.domain.model.settings
 
 import xyz.x3ofiz4.exvia.domain.model.custom.CustomMetricDefinition
 import xyz.x3ofiz4.exvia.domain.model.custom.CustomPlotDefinition
+import xyz.x3ofiz4.exvia.domain.model.custom.FileScriptDefinition
 import xyz.x3ofiz4.exvia.domain.model.custom.NamedPlotTheme
 import xyz.x3ofiz4.exvia.domain.model.custom.NamedUiTheme
 import xyz.x3ofiz4.exvia.domain.model.custom.TableStyleRule
@@ -28,10 +29,12 @@ data class RepoSettings(
     val financeColumns: List<String>,
     val customMetrics: List<CustomMetricDefinition>,
     val customPlots: List<CustomPlotDefinition>,
-    val reportRepo: String,
+    val fileScripts: List<FileScriptDefinition>,
+    val imaginaryFields: List<xyz.x3ofiz4.exvia.domain.model.custom.ImaginaryFieldDefinition>,
     val uiScale: Double,
     val textScale: Double,
     val rowsPerPage: Int,
+    val undoHistoryLimit: Int,
     val themePreset: ThemePreset,
     val palette: ThemePalette,
     val plotTheme: PlotTheme,

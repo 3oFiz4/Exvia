@@ -799,6 +799,40 @@
     }
   }
 
+  function evaluateFormulaBatch(payload) {
+    const theme = themeOf(payload);
+    try {
+      // Field and imaginary-field formulas must not depend on the plotting
+      // libraries being downloaded or pre-warmed. Plot modules remain exposed
+      // when available, but ordinary formulas can execute completely offline.
+      const d3Module = typeof d3 !== 'undefined' ? d3 : undefined;
+      const plotModule = typeof Plot !== 'undefined' ? Plot : undefined;
+      const arqueroModule = typeof aq !== 'undefined' ? aq : undefined;
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      const jsonFile = Object.freeze(payload.jsonFile || {name:'current.json',content:JSON.stringify(rows)});
+      const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+      const results = tasks.map((task, taskIndex) => {
+        try {
+          const index = Number.isFinite(Number(task.index)) ? Number(task.index) : taskIndex;
+          const row = Object.freeze(task.row && typeof task.row === 'object' ? task.row : (rows[index] || {}));
+          const table = rows;
+          const field = String(task.field || '');
+          const body = String(task.body || "return '';" );
+          const context = Object.freeze({theme,jsonFile,helpers,row,table,field,index});
+          const fn = new Function('row','table','field','index','context','jsonFile','d3','Plot','aq','theme','helpers',`"use strict";\n${body}\n`);
+          const value = fn(row,table,field,index,context,jsonFile,d3Module,plotModule,arqueroModule,theme,helpers);
+          if (value && typeof value.then === 'function') throw new Error('Async field formulas are not supported; return synchronously.');
+          return {id:String(task.id ?? taskIndex), ok:true, value:value === undefined || value === null ? '' : value};
+        } catch (error) {
+          return {id:String(task.id ?? taskIndex), ok:false, error:String(error?.message || error)};
+        }
+      });
+      return JSON.stringify({ok:true,results});
+    } catch (e) {
+      return JSON.stringify({ok:false,error:String(e?.message || e),results:[]});
+    }
+  }
+
   function resize() {
     if (!lastPayload || isRendering) return;
     const width = root.clientWidth;
@@ -820,6 +854,7 @@
     render,
     resize,
     evaluateMetric,
+    evaluateFormulaBatch,
     helpers,
     versions:() => ({d3:d3?.version || '7', plot:'0.6.17', arquero:'8.0.3'})
   });

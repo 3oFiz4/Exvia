@@ -2,6 +2,8 @@ package xyz.x3ofiz4.exvia.domain.service
 import xyz.x3ofiz4.exvia.domain.model.custom.CustomMetricDefinition
 import xyz.x3ofiz4.exvia.domain.model.custom.CustomPlotDefinition
 import xyz.x3ofiz4.exvia.domain.model.custom.FilterSnippet
+import xyz.x3ofiz4.exvia.domain.model.custom.FileScriptDefinition
+import xyz.x3ofiz4.exvia.domain.model.custom.ImaginaryFieldSnippet
 import xyz.x3ofiz4.exvia.domain.model.custom.TableStyleRule
 
 
@@ -123,6 +125,45 @@ object BuiltinExamples {
      * The user performs JSON.parse(jsonFile.content) and infers whichever keys
      * they want to use inside their own script.
      */
+    val imaginaryFieldSnippets: List<ImaginaryFieldSnippet> = listOf(
+        ImaginaryFieldSnippet(
+            id = "imaginary_normalized_price",
+            name = "Normalized PRICE (0–1)",
+            description = "Min-max normalizes the current row PRICE against every numeric PRICE in the active table.",
+            expression = "= const get=(o,k)=>{const q=Object.keys(o||{}).find(x=>x.toLowerCase()===k.toLowerCase());return q==null?'':o[q]}; const values=table.map(r=>Number(String(get(r,'PRICE')).replace(/,/g,''))).filter(Number.isFinite); const x=Number(String(get(row,'PRICE')).replace(/,/g,'')); if(!Number.isFinite(x)||!values.length)return ''; const lo=Math.min(...values),hi=Math.max(...values); return hi===lo?0:(x-lo)/(hi-lo);",
+        ),
+        ImaginaryFieldSnippet(
+            id = "imaginary_random_price",
+            name = "Random PRICE from table",
+            description = "Returns a random non-empty PRICE value from all rows.",
+            expression = "= const get=(o,k)=>{const q=Object.keys(o||{}).find(x=>x.toLowerCase()===k.toLowerCase());return q==null?'':o[q]}; const values=table.map(r=>get(r,'PRICE')).filter(v=>String(v??'').trim()!==''); return values.length?values[Math.floor(Math.random()*values.length)]:'';",
+        ),
+        ImaginaryFieldSnippet(
+            id = "imaginary_budget_flag",
+            name = "Budget detector (> 50)",
+            description = "Returns 1 when PRICE is greater than 50, otherwise 0.",
+            expression = "= const get=(o,k)=>{const q=Object.keys(o||{}).find(x=>x.toLowerCase()===k.toLowerCase());return q==null?'':o[q]}; const x=Number(String(get(row,'PRICE')).replace(/,/g,'')); return Number.isFinite(x)&&x>50?1:0;",
+        ),
+        ImaginaryFieldSnippet(
+            id = "imaginary_price_share",
+            name = "PRICE share of table",
+            description = "Returns this row PRICE as a fraction of the sum of absolute PRICE values.",
+            expression = "= const get=(o,k)=>{const q=Object.keys(o||{}).find(x=>x.toLowerCase()===k.toLowerCase());return q==null?'':o[q]}; const x=Math.abs(Number(String(get(row,'PRICE')).replace(/,/g,''))); const total=table.reduce((s,r)=>{const n=Math.abs(Number(String(get(r,'PRICE')).replace(/,/g,'')));return s+(Number.isFinite(n)?n:0)},0); return Number.isFinite(x)&&total?x/total:'';",
+        ),
+        ImaginaryFieldSnippet(
+            id = "imaginary_income_expense",
+            name = "Income / expense label",
+            description = "Labels +PRICE rows as income and ordinary PRICE rows as expense.",
+            expression = "= const get=(o,k)=>{const q=Object.keys(o||{}).find(x=>x.toLowerCase()===k.toLowerCase());return q==null?'':o[q]}; const raw=String(get(row,'PRICE')).trim(); return raw?(raw.startsWith('+')?'income':'expense'):'';",
+        ),
+        ImaginaryFieldSnippet(
+            id = "imaginary_sql_budget",
+            name = "SQLite high-budget label",
+            description = "Demonstrates the == SQLite scalar syntax.",
+            expression = "== SELECT 'over_budget' WHERE PRICE > 50",
+        ),
+    )
+
     val customMetrics: List<CustomMetricDefinition> = listOf(
         CustomMetricDefinition(
             id = "example_metric_p90_expense",
@@ -720,6 +761,78 @@ object BuiltinExamples {
             """.trimIndent(),
         ),
 
+    )
+
+    val fileScripts: List<FileScriptDefinition> = listOf(
+        FileScriptDefinition(
+            id = "file_sql_merge_exact",
+            name = "Merge two files · exact schema",
+            enabled = false,
+            script = """
+                -- @exact-schema
+                -- Replace the two names below. __file identifies the source JSON file.
+                SELECT * FROM ALL_FILES
+                WHERE __file IN ('2026-07.json', '2026-08.json')
+                ORDER BY __file, __row;
+            """.trimIndent(),
+        ),
+        FileScriptDefinition(
+            id = "file_sql_union_all",
+            name = "Union every JSON file",
+            enabled = false,
+            script = """
+                SELECT * FROM ALL_FILES
+                ORDER BY __file, __row;
+            """.trimIndent(),
+        ),
+        FileScriptDefinition(
+            id = "file_sql_large_expenses",
+            name = "Extract PRICE >= 50",
+            enabled = false,
+            script = """
+                SELECT * FROM ALL_FILES
+                WHERE CAST(REPLACE(PRICE, ',', '') AS REAL) >= 50
+                ORDER BY CAST(REPLACE(PRICE, ',', '') AS REAL) DESC;
+            """.trimIndent(),
+        ),
+        FileScriptDefinition(
+            id = "file_sql_daily_totals",
+            name = "Daily PRICE totals",
+            enabled = false,
+            script = """
+                SELECT DATE,
+                       SUM(ABS(CAST(REPLACE(PRICE, ',', '') AS REAL))) AS TOTAL_PRICE
+                FROM ALL_FILES
+                WHERE PRICE IS NOT NULL AND PRICE NOT LIKE '+%'
+                GROUP BY DATE
+                ORDER BY DATE;
+            """.trimIndent(),
+        ),
+        FileScriptDefinition(
+            id = "file_sql_category_totals",
+            name = "CATEGORY totals",
+            enabled = false,
+            script = """
+                SELECT CATEGORY,
+                       COUNT(*) AS N,
+                       SUM(ABS(CAST(REPLACE(PRICE, ',', '') AS REAL))) AS TOTAL_PRICE
+                FROM ALL_FILES
+                WHERE PRICE IS NOT NULL
+                GROUP BY CATEGORY
+                ORDER BY TOTAL_PRICE DESC;
+            """.trimIndent(),
+        ),
+        FileScriptDefinition(
+            id = "file_sql_description_search",
+            name = "Description keyword export",
+            enabled = false,
+            script = """
+                SELECT * FROM ALL_FILES
+                WHERE LOWER(DESCRIPTION) LIKE '%food%'
+                   OR LOWER(DESCRIPTION) LIKE '%lunch%'
+                ORDER BY __file, __row;
+            """.trimIndent(),
+        ),
     )
 
 }
