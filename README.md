@@ -1,4 +1,4 @@
-# Exvia v26.8.7
+# Exvia
 
 <img width="236" height="236" alt="logo" src="https://github.com/user-attachments/assets/049d1e07-5866-4c51-bcb8-d0a83479a0b1" />
 
@@ -58,6 +58,9 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 17. Pagination within Table (Buttons are intuitive, you can also click on the `Page i / n` to input a specific `i` page.
 18. Flagging option (hold click at `Filtering OFF/ON` button for two seconds, and hold click at the Flagging Input to see available snippets)
 19. Customizable color mapping (function are similar to flagging, but automatically activate at initial load)
+20. Revert/Undo and Redo option if mistake happened
+21. Field and Imaginary Field with JS and SQLite syntax support, imitating Excel-like formula
+22. File scripting using SQLite syntax
 
 # To-Do (next release)
 
@@ -68,9 +71,9 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 >
 > This is more of a guess, there is a chance I might do R+2 at R+1.
 
-- [ ] Remove "Set Target Repo" `(R+1)`
-- [ ] Auto-save for Filtering & Flagging snippets `(R+1)`
-- [ ] Add "Add Imaginary Field", similar to "Add Field" but does not affect core .JSON schema, acts like a dummy. Imitating a feature highly similar to Excel formula `(R+1)`
+- [x] Remove "Set Target Repo" `(R+1)`
+- [x] Auto-save for Filtering & Flagging snippets `(R+1)`
+- [x] Add "Add Imaginary Field", similar to "Add Field" but does not affect core .JSON schema, acts like a dummy. Imitating a feature highly similar to Excel formula `(R+1)`
 <details>
   <summary>
     See in detail
