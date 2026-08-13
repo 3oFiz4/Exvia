@@ -124,6 +124,7 @@ class SettingsStore(context: Context) {
             imaginaryFields = parseImaginaryFields(prefs.getString(KEY_IMAGINARY_FIELDS, "[]") ?: "[]"),
             uiScale = prefs.getString(KEY_UI_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.60) ?: 1.0,
             textScale = prefs.getString(KEY_TEXT_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.80) ?: 1.0,
+            iconMode = UiIconMode.fromId(prefs.getString(KEY_ICON_MODE, UiIconMode.ICON_AND_TEXT.id)),
             rowsPerPage = prefs.getString(KEY_ROWS_PER_PAGE, "25")?.toIntOrNull()?.coerceIn(1, 500) ?: 25,
             undoHistoryLimit = prefs.getString(KEY_UNDO_HISTORY_LIMIT, "50")?.toIntOrNull()?.coerceIn(1, 50) ?: 50,
             automaticAmend = prefs.getBoolean(KEY_AUTOMATIC_AMEND, true),
@@ -166,6 +167,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_IMAGINARY_FIELDS, imaginaryFieldsToJson(settings.imaginaryFields))
             .putString(KEY_UI_SCALE, settings.uiScale.toString())
             .putString(KEY_TEXT_SCALE, settings.textScale.toString())
+            .putString(KEY_ICON_MODE, settings.iconMode.id)
             .putString(KEY_ROWS_PER_PAGE, settings.rowsPerPage.coerceIn(1, 500).toString())
             .putString(KEY_UNDO_HISTORY_LIMIT, settings.undoHistoryLimit.coerceIn(1, 50).toString())
             .putBoolean(KEY_AUTOMATIC_AMEND, settings.automaticAmend)
@@ -245,6 +247,7 @@ class SettingsStore(context: Context) {
         private const val KEY_DEVELOPER_MODE = "developer_mode"
         private const val KEY_UI_SCALE = "ui_scale"
         private const val KEY_TEXT_SCALE = "text_scale"
+        private const val KEY_ICON_MODE = "icon_mode"
         private const val KEY_ROWS_PER_PAGE = "rows_per_page"
         private const val KEY_UNDO_HISTORY_LIMIT = "undo_history_limit"
         private const val KEY_AUTOMATIC_AMEND = "automatic_amend"
@@ -322,6 +325,7 @@ class SettingsStore(context: Context) {
                 put("financeColumns", JSONArray(settings.financeColumns))
                 put("uiScale", settings.uiScale)
                 put("textScale", settings.textScale)
+                put("iconMode", settings.iconMode.id)
                 put("rowsPerPage", settings.rowsPerPage)
                 put("undoHistoryLimit", settings.undoHistoryLimit)
                 put("automaticAmend", settings.automaticAmend)

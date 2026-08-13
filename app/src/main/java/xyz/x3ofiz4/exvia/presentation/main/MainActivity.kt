@@ -191,6 +191,7 @@ class MainActivity : Activity() {
     private lateinit var rowsPerPageSetting: EditText
     private lateinit var undoHistoryLimitSetting: EditText
     private lateinit var automaticAmendSpinner: Spinner
+    private lateinit var iconModeSpinner: Spinner
     private lateinit var customStatList: LinearLayout
     private var customMetricsDraft = mutableListOf<CustomMetricDefinition>()
     private var customPlotsDraft = mutableListOf<CustomPlotDefinition>()
@@ -508,6 +509,7 @@ class MainActivity : Activity() {
             setPadding(dp(8), dp(5), dp(8), dp(5))
             background = noBorderBackground()
             AppFonts.apply(this, bold = true)
+            applyActionIcon(this, "Git", "Git.png")
             setOnClickListener { if (!busy) showGitPanel() }
         }
         titleRow.addView(gitButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)).apply { marginEnd = dp(3) })
@@ -518,6 +520,7 @@ class MainActivity : Activity() {
             setPadding(dp(8), dp(5), dp(8), dp(5))
             background = noBorderBackground()
             AppFonts.apply(this, bold = true)
+            applyActionIcon(this, "Re-sync", "Resync.png")
             setOnClickListener { if (!busy) refreshFilesAndTable() }
         }
         titleRow.addView(resyncButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)).apply { marginEnd = dp(7) })
@@ -526,6 +529,7 @@ class MainActivity : Activity() {
             setTextColor(PRIMARY)
             setPadding(dp(8), dp(8), 0, dp(8))
             AppFonts.apply(this)
+            applyActionIcon(this, "Exvia Settings", "Settings.png")
             setOnClickListener { drawerRoot.openDrawer() }
         })
         content.addView(titleRow, matchWidth())
@@ -588,7 +592,7 @@ class MainActivity : Activity() {
             setOnClickListener {
                 tableControlsVisible = !tableControlsVisible
                 tableEntryControls.visibility = if (tableControlsVisible) View.VISIBLE else View.GONE
-                text = if (tableControlsVisible) "Hide input controls" else "Show input controls"
+                applyActionIcon(this, if (tableControlsVisible) "Hide input controls" else "Show input controls")
             }
         }
         addView(tableControlsToggle, spacedMatchWidth(3))
@@ -662,6 +666,7 @@ class MainActivity : Activity() {
             minHeight = dp(30)
             background = inactiveActionBackground(PRIMARY)
             AppFonts.apply(this, bold = true)
+            applyActionIcon(this, "Filtering method")
             setOnClickListener {
                 if (queryMode == TableQueryMode.FILTERING) showFilteringMethodManager()
                 else showFlaggingMethodManager()
@@ -675,6 +680,7 @@ class MainActivity : Activity() {
             minHeight = dp(30)
             AppFonts.apply(this, bold = true)
             background = inactiveActionBackground(PRIMARY)
+            applyActionIcon(this, "Filter OFF", "Filtering.png")
             setOnClickListener {
                 if (queryMode == TableQueryMode.FILTERING) {
                     filterEnabled = !filterEnabled
@@ -870,15 +876,32 @@ class MainActivity : Activity() {
         uiScaleSetting = uiScale.input.apply { inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL }
         val textScale = configField("Text size multiplier", "display.text_scale", settings.textScale.toString(), "Scales text independently from the rest of the UI. Recommended range: 0.70–1.80.")
         textScaleSetting = textScale.input.apply { inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL }
+        iconModeSpinner = Spinner(this).apply {
+            adapter = iconSpinnerAdapter(UiIconMode.entries.map { it.displayName }, "UiDisplayMode.png")
+            setSelection(UiIconMode.entries.indexOf(settings.iconMode).coerceAtLeast(0))
+            backgroundTintList = inputTint()
+        }
+        val iconModeWrapper = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(BLACK)
+            addView(TextView(this@MainActivity).apply {
+                text = "Icon / text display"
+                setTextColor(WHITE)
+                textSize = 12.5f
+                setPadding(dp(4), dp(2), dp(4), dp(2))
+                AppFonts.apply(this, bold = true)
+                tooltipController.attachHold(this, { "Choose Icon only, Text only, or Icon and text. Missing icon assets are ignored safely. Changes apply after Save settings and reload." })
+            }, matchWidth())
+            addView(iconModeSpinner, matchWidth())
+        }
         val rowsPerPage = configField("Rows per table page", "display.rows_per_page", settings.rowsPerPage.toString(), "Number of rows shown on one Table page. Allowed range: 1–500.")
         rowsPerPageSetting = rowsPerPage.input.apply { inputType = InputType.TYPE_CLASS_NUMBER }
         val undoHistory = configField("Undo/Redo history", "display.undo_history_limit", settings.undoHistoryLimit.toString(), "Maximum Table CRUD undo history retained in memory. Only changed-row deltas are stored. Allowed range: 1–50.")
         undoHistoryLimitSetting = undoHistory.input.apply { inputType = InputType.TYPE_CLASS_NUMBER }
         automaticAmendSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(
-                this@MainActivity,
-                android.R.layout.simple_spinner_dropdown_item,
+            adapter = iconSpinnerAdapter(
                 listOf("Automatic · Commit immediately", "Manual · Stage locally"),
+                "Git.png",
             )
             setSelection(if (settings.automaticAmend) 0 else 1)
             backgroundTintList = inputTint()
@@ -1002,6 +1025,7 @@ class MainActivity : Activity() {
 
         body.addView(accordion("Interface", tooltip = "Resize the full UI and text independently. Changes take effect after Save settings and reload.") { container ->
             listOf(uiScale.wrapper, textScale.wrapper, rowsPerPage.wrapper, undoHistory.wrapper).forEach { container.addView(it, spacedMatchWidth(5)) }
+            container.addView(iconModeWrapper, spacedMatchWidth(5))
             container.addView(automaticAmendWrapper, spacedMatchWidth(5))
         }, spacedMatchWidth(10))
 
@@ -1230,11 +1254,7 @@ class MainActivity : Activity() {
         uiThemeChoices = ThemePreset.entries.map { ThemeChoice("builtin:${it.id}", it.displayName) } +
             customUiThemesDraft.map { ThemeChoice(it.id, "Custom · ${it.name}") }
         suppressUiThemeSelection = true
-        themeSpinner.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            uiThemeChoices.map { it.label },
-        )
+        themeSpinner.adapter = iconSpinnerAdapter(uiThemeChoices.map { it.label }, "Theme.png")
         val index = uiThemeChoices.indexOfFirst { it.id == selectedId }.takeIf { it >= 0 } ?: 0
         themeSpinner.setSelection(index, false)
         themeSpinner.post { suppressUiThemeSelection = false }
@@ -1246,11 +1266,7 @@ class MainActivity : Activity() {
             ThemeChoice("builtin:ayu", "Ayu plot"),
         ) + customPlotThemesDraft.map { ThemeChoice(it.id, "Custom · ${it.name}") }
         suppressPlotThemeSelection = true
-        plotThemeSpinner.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            plotThemeChoices.map { it.label },
-        )
+        plotThemeSpinner.adapter = iconSpinnerAdapter(plotThemeChoices.map { it.label }, "PlotTheme.png")
         val index = plotThemeChoices.indexOfFirst { it.id == selectedId }.takeIf { it >= 0 } ?: 0
         plotThemeSpinner.setSelection(index, false)
         plotThemeSpinner.post { suppressPlotThemeSelection = false }
@@ -1375,7 +1391,7 @@ class MainActivity : Activity() {
             allExamples.forEach { example ->
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 row.addView(infoText(example.name).apply { setTextColor(WHITE); textSize = 12f; AppFonts.apply(this) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editCustomMetric(null, example) } }, LinearLayout.LayoutParams(dp(52), dp(30)))
+                row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Use", "Use.png"); setOnClickListener { editCustomMetric(null, example) } }, LinearLayout.LayoutParams(dp(52), dp(30)))
                 examples.addView(row, matchWidth())
             }
         }, spacedMatchWidth(4))
@@ -1384,7 +1400,7 @@ class MainActivity : Activity() {
             BuiltinExamples.customPlots.forEach { example ->
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 row.addView(infoText("${example.name}\n${example.engine}").apply { setTextColor(WHITE); textSize = 12f; AppFonts.apply(this) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editCustomPlot(null, example) } }, LinearLayout.LayoutParams(dp(52), dp(30)))
+                row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Use", "Use.png"); setOnClickListener { editCustomPlot(null, example) } }, LinearLayout.LayoutParams(dp(52), dp(30)))
                 examples.addView(row, matchWidth())
             }
         }, spacedMatchWidth(5))
@@ -1405,8 +1421,8 @@ class MainActivity : Activity() {
                 plots.forEach { plot ->
                     val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                     row.addView(infoText(plot.name).apply { setTextColor(if (plot.enabled) WHITE else MUTED) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editCustomPlot(plot) } }, LinearLayout.LayoutParams(dp(48), dp(30)))
-                    row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); setOnClickListener { customPlotsDraft.removeAll { it.id == plot.id }; persistCustomPlots("Custom plot removed."); renderCustomStatSettings() } }, LinearLayout.LayoutParams(dp(34), dp(30)))
+                    row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png"); applyActionIcon(this, "Edit", "Edit.png"); setOnClickListener { editCustomPlot(plot) } }, LinearLayout.LayoutParams(dp(48), dp(30)))
+                    row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { customPlotsDraft.removeAll { it.id == plot.id }; persistCustomPlots("Custom plot removed."); renderCustomStatSettings() } }, LinearLayout.LayoutParams(dp(34), dp(30)))
                     box.addView(row, matchWidth())
                 }
                 box.addView(infoText("# Metrics").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(5))
@@ -1414,8 +1430,8 @@ class MainActivity : Activity() {
                 metrics.forEach { metric ->
                     val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                     row.addView(infoText(metric.name).apply { setTextColor(if (metric.enabled) WHITE else MUTED) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editCustomMetric(metric) } }, LinearLayout.LayoutParams(dp(48), dp(30)))
-                    row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); setOnClickListener { customMetricsDraft.removeAll { it.id == metric.id }; persistCustomMetrics("Custom metric removed."); renderCustomStatSettings() } }, LinearLayout.LayoutParams(dp(34), dp(30)))
+                    row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png"); applyActionIcon(this, "Edit", "Edit.png"); setOnClickListener { editCustomMetric(metric) } }, LinearLayout.LayoutParams(dp(48), dp(30)))
+                    row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { customMetricsDraft.removeAll { it.id == metric.id }; persistCustomMetrics("Custom metric removed."); renderCustomStatSettings() } }, LinearLayout.LayoutParams(dp(34), dp(30)))
                     box.addView(row, matchWidth())
                 }
             }, matchWidth())
@@ -1425,7 +1441,7 @@ class MainActivity : Activity() {
     private fun groupSpinner(selectedId: String): Spinner {
         val groups = normalizedScriptGroups()
         return Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, groups.map { it.name })
+            adapter = iconSpinnerAdapter(groups.map { it.name }, "CustomAccordions.png")
             backgroundTintList = inputTint()
             setSelection(groups.indexOfFirst { it.id == selectedId }.coerceAtLeast(0))
             tag = groups
@@ -1441,7 +1457,7 @@ class MainActivity : Activity() {
             setText(source?.script?:"const rows = JSON.parse(jsonFile.content);\nreturn rows.length;")
         }
         var enabled=source?.enabled?:true
-        val enabledButton=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;text=if(enabled)"Enabled" else "Disabled"}}
+        val enabledButton=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;applyActionIcon(this,if(enabled)"Enabled" else "Disabled")}}
         val body=LinearLayout(this).apply{
             orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0)
             addView(infoText("Available: jsonFile, d3, Plot, aq, theme, helpers, context.inputs, and ENV. Return a scalar/object, or {label,value,inputs:[{name,label,placeholder,default,env:'ENV.x.path'}]} to render persistent inputs.").apply{setTextColor(MUTED)},spacedMatchWidth(5))
@@ -1463,10 +1479,10 @@ class MainActivity : Activity() {
         val name=styledInput("custom_plot.name").apply{setText(source?.name?.removePrefix("Example · ").orEmpty())}
         val group=groupSpinner(source?.groupId?:DEFAULT_SCRIPT_GROUP_ID)
         val engineNames=listOf("Auto","Observable Plot","D3.js");val engineValues=listOf("auto","observable","d3")
-        val engine=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,engineNames);backgroundTintList=inputTint();setSelection(engineValues.indexOf(source?.engine?:"auto").coerceAtLeast(0))}
+        val engine=Spinner(this).apply{adapter=iconSpinnerAdapter(engineNames,"Plot.png");backgroundTintList=inputTint();setSelection(engineValues.indexOf(source?.engine?:"auto").coerceAtLeast(0))}
         val script=JavaScriptCodeEditor(this).apply{hint="custom_plot.javascript";setText(source?.script?:"const rows=helpers.rows(jsonFile); return Plot.plot({width:context.width,height:context.height,marks:[Plot.dot(rows,{x:(d,i)=>i,y:d=>helpers.number(d.PRICE),tip:true})]});")}
         var enabled=source?.enabled?:true
-        val enabledButton=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;text=if(enabled)"Enabled" else "Disabled"}}
+        val enabledButton=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;applyActionIcon(this,if(enabled)"Enabled" else "Disabled")}}
         val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Available: d3, Plot, aq, jsonFile, context, theme, helpers, and ENV. Custom plots receive Exvia semantic zoom automatically when possible.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(name,spacedMatchWidth(5));addView(group,spacedMatchWidth(5));addView(engine,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(390)));addView(enabledButton,spacedMatchWidth(5))}
         val dialog=AlertDialog.Builder(this).setTitle(if(existing!=null)"Edit custom plot" else "New custom plot").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create()
         dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
@@ -1487,7 +1503,7 @@ class MainActivity : Activity() {
             normalizedScriptGroups().forEach{group->
                 val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
                 row.addView(infoText(group.name).apply{setTextColor(if(group.id==DEFAULT_SCRIPT_GROUP_ID)MUTED else WHITE);setOnClickListener{if(group.id!=DEFAULT_SCRIPT_GROUP_ID)promptEditScriptGroup(group){dialog.dismiss();showScriptGroupManager()}}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f))
-                if(group.id!=DEFAULT_SCRIPT_GROUP_ID) row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);setOnClickListener{
+                if(group.id!=DEFAULT_SCRIPT_GROUP_ID) row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);applyActionIcon(this,"Delete","Delete.png");setOnClickListener{
                     customMetricsDraft=customMetricsDraft.map{if(it.groupId==group.id)it.copy(groupId=DEFAULT_SCRIPT_GROUP_ID)else it}.toMutableList();customPlotsDraft=customPlotsDraft.map{if(it.groupId==group.id)it.copy(groupId=DEFAULT_SCRIPT_GROUP_ID)else it}.toMutableList();scriptGroupsDraft.removeAll{it.id==group.id};persistScriptGroups("Accordion removed; scripts moved to Default.");persistCustomMetrics("Metrics regrouped.");persistCustomPlots("Plots regrouped.");dialog.dismiss();showScriptGroupManager()
                 }},LinearLayout.LayoutParams(dp(40),dp(32)))
                 list.addView(row,matchWidth())
@@ -1564,7 +1580,7 @@ class MainActivity : Activity() {
                 BuiltinExamples.environmentVariables.forEach { example ->
                     val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                     row.addView(infoText(example.name), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editEnvironmentVariable(null, example) { dialog.dismiss(); showEnvironmentManager() } } }, LinearLayout.LayoutParams(dp(52), dp(30)))
+                    row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Use", "Use.png"); setOnClickListener { editEnvironmentVariable(null, example) { dialog.dismiss(); showEnvironmentManager() } } }, LinearLayout.LayoutParams(dp(52), dp(30)))
                     box.addView(row, matchWidth())
                 }
             }, matchWidth())
@@ -1572,7 +1588,7 @@ class MainActivity : Activity() {
             environmentVariablesDraft.forEach { item ->
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 row.addView(infoText("ENV.${item.name}").apply { setOnClickListener { editEnvironmentVariable(item, null) { dialog.dismiss(); showEnvironmentManager() } } }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); setOnClickListener { environmentVariablesDraft.removeAll { it.id == item.id }; persistEnvironmentVariables("ENV variable removed."); rebuild() } }, LinearLayout.LayoutParams(dp(40), dp(32)))
+                row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { environmentVariablesDraft.removeAll { it.id == item.id }; persistEnvironmentVariables("ENV variable removed."); rebuild() } }, LinearLayout.LayoutParams(dp(40), dp(32)))
                 root.addView(row, matchWidth())
             }
         }
@@ -1614,7 +1630,7 @@ class MainActivity : Activity() {
                 BuiltinExamples.notificationRules.forEach { example ->
                     val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
                     row.addView(infoText(example.name), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editNotificationRule(null, example) { dialog.dismiss(); showNotificationManager() } } }, LinearLayout.LayoutParams(dp(52), dp(30)))
+                    row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Use", "Use.png"); setOnClickListener { editNotificationRule(null, example) { dialog.dismiss(); showNotificationManager() } } }, LinearLayout.LayoutParams(dp(52), dp(30)))
                     box.addView(row, matchWidth())
                 }
             }, matchWidth())
@@ -1622,7 +1638,7 @@ class MainActivity : Activity() {
             notificationRulesDraft.forEach { rule ->
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 row.addView(infoText("${rule.name} · ${rule.eventName}").apply { setTextColor(if (rule.enabled) WHITE else MUTED); setOnClickListener { editNotificationRule(rule, null) { dialog.dismiss(); showNotificationManager() } } }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); setOnClickListener { notificationRulesDraft.removeAll { it.id == rule.id }; persistNotificationRules("Notification rule removed."); rebuild() } }, LinearLayout.LayoutParams(dp(40), dp(32)))
+                row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { notificationRulesDraft.removeAll { it.id == rule.id }; persistNotificationRules("Notification rule removed."); rebuild() } }, LinearLayout.LayoutParams(dp(40), dp(32)))
                 root.addView(row, matchWidth())
             }
         }
@@ -1633,10 +1649,10 @@ class MainActivity : Activity() {
         val source = existing ?: template
         val events = listOf("event.amend", "event.resync", "event.save")
         val name = styledInput("notification.name").apply { setText(source?.name?.removePrefix("Example · ").orEmpty()) }
-        val event = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, events); backgroundTintList = inputTint(); setSelection(events.indexOf(source?.eventName ?: "event.amend").coerceAtLeast(0)) }
+        val event = Spinner(this).apply { adapter = iconSpinnerAdapter(events, "Notifications.png"); backgroundTintList = inputTint(); setSelection(events.indexOf(source?.eventName ?: "event.amend").coerceAtLeast(0)) }
         val script = JavaScriptCodeEditor(this).apply { hint = "notification.javascript"; setText(source?.script ?: "return {notify:true,title:'Exvia',body:String(event.name)};") }
         var enabled = source?.enabled ?: true
-        val enabledButton = styledButton(if (enabled) "Enabled" else "Disabled").apply { setOnClickListener { enabled = !enabled; text = if (enabled) "Enabled" else "Disabled" } }
+        val enabledButton = styledButton(if (enabled) "Enabled" else "Disabled").apply { setOnClickListener { enabled = !enabled; applyActionIcon(this, if (enabled) "Enabled" else "Disabled") } }
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0); addView(infoText("Available: event, metric(name), jsonFile, ENV, d3, Plot, aq, theme and helpers. Return {notify,title,body,severity:'red|normal',IS_TOAST:true|false}. IS_TOAST shows an in-app Android Toast; notify controls the system notification.").apply { setTextColor(MUTED) }, spacedMatchWidth(5)); addView(name, spacedMatchWidth(5)); addView(event, spacedMatchWidth(5)); addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))); addView(enabledButton, spacedMatchWidth(5)) }
         val dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New notification rule" else "Edit notification rule").setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
         dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { val n = name.text.toString().trim(); if (n.isBlank()) { name.error = "Name required"; return@setOnClickListener }; val next = NotificationRule(existing?.id ?: UUID.randomUUID().toString(), n, events[event.selectedItemPosition], script.text.toString(), enabled); notificationRulesDraft = if (existing == null) (notificationRulesDraft + next).toMutableList() else notificationRulesDraft.map { if (it.id == existing.id) next else it }.toMutableList(); persistNotificationRules("Notification rule auto-saved."); dialog.dismiss(); done() } }
@@ -1646,14 +1662,14 @@ class MainActivity : Activity() {
     private fun persistSchemaRules(message: String) { settings = settings.copy(schemaRules = schemaRulesDraft.toList()); settingsViewModel.saveSchemaRules(settings); schemaConfigSignature = ""; statusText.text = message; scheduleSchemaEvaluation(currentData) }
     private fun showSchemaRuleManager() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12),0,dp(12),0) }; lateinit var dialog: AlertDialog
-        fun rebuild(){ root.removeAllViews(); root.addView(accordion("Built-in schema examples", initiallyOpen=false){ box -> BuiltinExamples.schemaRules.forEach { e -> val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(e.name),LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="Use";gravity=Gravity.CENTER;setTextColor(PRIMARY);AppFonts.apply(this);setOnClickListener{editSchemaRule(null,e){dialog.dismiss();showSchemaRuleManager()}}},LinearLayout.LayoutParams(dp(52),dp(30)));box.addView(row,matchWidth()) }},matchWidth());root.addView(styledButton("+ Add schema rule").apply{setOnClickListener{editSchemaRule(null,null){dialog.dismiss();showSchemaRuleManager()}}},spacedMatchWidth(5));schemaRulesDraft.forEach{r->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(r.name).apply{setTextColor(if(r.enabled)WHITE else MUTED);setOnClickListener{editSchemaRule(r,null){dialog.dismiss();showSchemaRuleManager()}}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);setOnClickListener{schemaRulesDraft.removeAll{it.id==r.id};persistSchemaRules("Schema rule removed.");rebuild()}},LinearLayout.LayoutParams(dp(40),dp(32)));root.addView(row,matchWidth())}}
+        fun rebuild(){ root.removeAllViews(); root.addView(accordion("Built-in schema examples", initiallyOpen=false){ box -> BuiltinExamples.schemaRules.forEach { e -> val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(e.name),LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="Use";gravity=Gravity.CENTER;setTextColor(PRIMARY);AppFonts.apply(this);applyActionIcon(this,"Use","Use.png");setOnClickListener{editSchemaRule(null,e){dialog.dismiss();showSchemaRuleManager()}}},LinearLayout.LayoutParams(dp(52),dp(30)));box.addView(row,matchWidth()) }},matchWidth());root.addView(styledButton("+ Add schema rule").apply{setOnClickListener{editSchemaRule(null,null){dialog.dismiss();showSchemaRuleManager()}}},spacedMatchWidth(5));schemaRulesDraft.forEach{r->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(r.name).apply{setTextColor(if(r.enabled)WHITE else MUTED);setOnClickListener{editSchemaRule(r,null){dialog.dismiss();showSchemaRuleManager()}}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);applyActionIcon(this,"Delete","Delete.png");setOnClickListener{schemaRulesDraft.removeAll{it.id==r.id};persistSchemaRules("Schema rule removed.");rebuild()}},LinearLayout.LayoutParams(dp(40),dp(32)));root.addView(row,matchWidth())}}
         dialog=AlertDialog.Builder(this).setTitle("Key schema scripts").setView(ScrollView(this).apply{addView(root,matchWidth())}).setNegativeButton("Close",null).create();rebuild();showDialog(dialog)
     }
-    private fun editSchemaRule(existing:SchemaRuleDefinition?,template:SchemaRuleDefinition?,done:()->Unit){val source=existing?:template;val name=styledInput("schema_rule.name").apply{setText(source?.name.orEmpty())};val script=JavaScriptCodeEditor(this).apply{setText(source?.script?:"return {};")};var enabled=source?.enabled?:true;val toggle=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;text=if(enabled)"Enabled" else "Disabled"}};val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Per key, return any of DEFAULT_VALUE, HIDDEN, NUMBER_ONLY_KEYPAD, PLACEHOLDER, AUTO_COMPLETION, AUTO_COMPLETION_PARSING, BOOLEAN_01. Available: key, rows, ENV, context.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(name,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(300)));addView(toggle,spacedMatchWidth(5))};val dialog=AlertDialog.Builder(this).setTitle(if(existing==null)"New schema rule" else "Edit schema rule").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val n=name.text.toString().trim();if(n.isBlank()){name.error="Name required";return@setOnClickListener};val next=SchemaRuleDefinition(existing?.id?:UUID.randomUUID().toString(),n,script.text.toString(),enabled);schemaRulesDraft=if(existing==null)(schemaRulesDraft+next).toMutableList() else schemaRulesDraft.map{if(it.id==existing.id)next else it}.toMutableList();persistSchemaRules("Schema rule auto-saved.");dialog.dismiss();done()}};showDialog(dialog)}
+    private fun editSchemaRule(existing:SchemaRuleDefinition?,template:SchemaRuleDefinition?,done:()->Unit){val source=existing?:template;val name=styledInput("schema_rule.name").apply{setText(source?.name.orEmpty())};val script=JavaScriptCodeEditor(this).apply{setText(source?.script?:"return {};")};var enabled=source?.enabled?:true;val toggle=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;applyActionIcon(this,if(enabled)"Enabled" else "Disabled")}};val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Per key, return any of DEFAULT_VALUE, HIDDEN, NUMBER_ONLY_KEYPAD, PLACEHOLDER, AUTO_COMPLETION, AUTO_COMPLETION_PARSING, BOOLEAN_01. Available: key, rows, ENV, context.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(name,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(300)));addView(toggle,spacedMatchWidth(5))};val dialog=AlertDialog.Builder(this).setTitle(if(existing==null)"New schema rule" else "Edit schema rule").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val n=name.text.toString().trim();if(n.isBlank()){name.error="Name required";return@setOnClickListener};val next=SchemaRuleDefinition(existing?.id?:UUID.randomUUID().toString(),n,script.text.toString(),enabled);schemaRulesDraft=if(existing==null)(schemaRulesDraft+next).toMutableList() else schemaRulesDraft.map{if(it.id==existing.id)next else it}.toMutableList();persistSchemaRules("Schema rule auto-saved.");dialog.dismiss();done()}};showDialog(dialog)}
 
     private fun persistMetricColorMappings(message:String){settings=settings.copy(metricColorMappings=metricColorMappingsDraft.toList());settingsViewModel.saveMetricColorMappings(settings);metricColorSignature="";statusText.text=message;renderStats(mainViewModel.state.value.visibleData)}
-    private fun showMetricColorManager(){val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),0,dp(12),0)};lateinit var dialog:AlertDialog;fun rebuild(){root.removeAllViews();root.addView(accordion("Built-in metric color examples",initiallyOpen=false){box->BuiltinExamples.metricColorRules.forEach{e->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(e.name),LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="Use";gravity=Gravity.CENTER;setTextColor(PRIMARY);AppFonts.apply(this);setOnClickListener{editMetricColorRule(null,e){dialog.dismiss();showMetricColorManager()}}},LinearLayout.LayoutParams(dp(52),dp(30)));box.addView(row,matchWidth())}},matchWidth());root.addView(styledButton("+ Add metric color rule").apply{setOnClickListener{editMetricColorRule(null,null){dialog.dismiss();showMetricColorManager()}}},spacedMatchWidth(5));metricColorMappingsDraft.forEach{r->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText("${r.name} · ${r.metricName}").apply{setOnClickListener{editMetricColorRule(r,null){dialog.dismiss();showMetricColorManager()}}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);setOnClickListener{metricColorMappingsDraft.removeAll{it.id==r.id};persistMetricColorMappings("Metric color rule removed.");rebuild()}},LinearLayout.LayoutParams(dp(40),dp(32)));root.addView(row,matchWidth())}};dialog=AlertDialog.Builder(this).setTitle("Metric Color Mapping").setView(ScrollView(this).apply{addView(root,matchWidth())}).setNegativeButton("Close",null).create();rebuild();showDialog(dialog)}
-    private fun editMetricColorRule(existing:MetricColorRule?,template:MetricColorRule?,done:()->Unit){val source=existing?:template;val name=styledInput("metric_color.name").apply{setText(source?.name.orEmpty())};val metric=styledInput("metric.name or *").apply{setText(source?.metricName?:"*")};val script=JavaScriptCodeEditor(this).apply{setText(source?.script?:"const n=Number(metric.value); return {key:n<0?theme.negative:theme.positive,value:n<0?theme.negative:theme.positive};")};var enabled=source?.enabled?:true;val toggle=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;text=if(enabled)"Enabled" else "Disabled"}};val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Return {key:'#RRGGBB', value:'#RRGGBB'}. metric.name/value are exposed; metrics('Mean − Median gap') can read another rendered metric. ENV and theme are also available.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(name,spacedMatchWidth(5));addView(metric,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(260)));addView(toggle,spacedMatchWidth(5))};val dialog=AlertDialog.Builder(this).setTitle(if(existing==null)"New metric color rule" else "Edit metric color rule").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val n=name.text.toString().trim();val m=metric.text.toString().trim();if(n.isBlank()||m.isBlank()){name.error="Name and metric are required";return@setOnClickListener};val next=MetricColorRule(existing?.id?:UUID.randomUUID().toString(),n,m,script.text.toString(),enabled);metricColorMappingsDraft=if(existing==null)(metricColorMappingsDraft+next).toMutableList() else metricColorMappingsDraft.map{if(it.id==existing.id)next else it}.toMutableList();persistMetricColorMappings("Metric color rule auto-saved.");dialog.dismiss();done()}};showDialog(dialog)}
+    private fun showMetricColorManager(){val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),0,dp(12),0)};lateinit var dialog:AlertDialog;fun rebuild(){root.removeAllViews();root.addView(accordion("Built-in metric color examples",initiallyOpen=false){box->BuiltinExamples.metricColorRules.forEach{e->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(e.name),LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="Use";gravity=Gravity.CENTER;setTextColor(PRIMARY);AppFonts.apply(this);applyActionIcon(this,"Use","Use.png");setOnClickListener{editMetricColorRule(null,e){dialog.dismiss();showMetricColorManager()}}},LinearLayout.LayoutParams(dp(52),dp(30)));box.addView(row,matchWidth())}},matchWidth());root.addView(styledButton("+ Add metric color rule").apply{setOnClickListener{editMetricColorRule(null,null){dialog.dismiss();showMetricColorManager()}}},spacedMatchWidth(5));metricColorMappingsDraft.forEach{r->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText("${r.name} · ${r.metricName}").apply{setOnClickListener{editMetricColorRule(r,null){dialog.dismiss();showMetricColorManager()}}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);applyActionIcon(this,"Delete","Delete.png");setOnClickListener{metricColorMappingsDraft.removeAll{it.id==r.id};persistMetricColorMappings("Metric color rule removed.");rebuild()}},LinearLayout.LayoutParams(dp(40),dp(32)));root.addView(row,matchWidth())}};dialog=AlertDialog.Builder(this).setTitle("Metric Color Mapping").setView(ScrollView(this).apply{addView(root,matchWidth())}).setNegativeButton("Close",null).create();rebuild();showDialog(dialog)}
+    private fun editMetricColorRule(existing:MetricColorRule?,template:MetricColorRule?,done:()->Unit){val source=existing?:template;val name=styledInput("metric_color.name").apply{setText(source?.name.orEmpty())};val metric=styledInput("metric.name or *").apply{setText(source?.metricName?:"*")};val script=JavaScriptCodeEditor(this).apply{setText(source?.script?:"const n=Number(metric.value); return {key:n<0?theme.negative:theme.positive,value:n<0?theme.negative:theme.positive};")};var enabled=source?.enabled?:true;val toggle=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;applyActionIcon(this,if(enabled)"Enabled" else "Disabled")}};val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Return {key:'#RRGGBB', value:'#RRGGBB'}. metric.name/value are exposed; metrics('Mean − Median gap') can read another rendered metric. ENV and theme are also available.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(name,spacedMatchWidth(5));addView(metric,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(260)));addView(toggle,spacedMatchWidth(5))};val dialog=AlertDialog.Builder(this).setTitle(if(existing==null)"New metric color rule" else "Edit metric color rule").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val n=name.text.toString().trim();val m=metric.text.toString().trim();if(n.isBlank()||m.isBlank()){name.error="Name and metric are required";return@setOnClickListener};val next=MetricColorRule(existing?.id?:UUID.randomUUID().toString(),n,m,script.text.toString(),enabled);metricColorMappingsDraft=if(existing==null)(metricColorMappingsDraft+next).toMutableList() else metricColorMappingsDraft.map{if(it.id==existing.id)next else it}.toMutableList();persistMetricColorMappings("Metric color rule auto-saved.");dialog.dismiss();done()}};showDialog(dialog)}
 
     private fun persistCustomMetricInputs() { settings=settings.copy(customMetricInputs=customMetricInputsDraft.toMap()); settingsViewModel.saveCustomMetricInputs(settings) }
 
@@ -1789,6 +1805,7 @@ class MainActivity : Activity() {
             imaginaryFields = imaginaryFieldsDraft.toList(),
             uiScale = uiScale!!,
             textScale = textScale!!,
+            iconMode = UiIconMode.entries.getOrElse(iconModeSpinner.selectedItemPosition) { UiIconMode.ICON_AND_TEXT },
             rowsPerPage = rowsPerPage!!,
             undoHistoryLimit = undoHistoryLimit!!,
             automaticAmend = automaticAmendSpinner.selectedItemPosition == 0,
@@ -1821,7 +1838,7 @@ class MainActivity : Activity() {
         val categories = listOf("Bug", "Enhancement", "Feature")
         val issueLabels = listOf("#bug", "#ench", "#feat")
         val typeSpinner = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, categories)
+            adapter = iconSpinnerAdapter(categories, "Report.png")
             backgroundTintList = inputTint()
         }
         val titleInput = styledInput("report.title").apply {
@@ -2174,13 +2191,14 @@ class MainActivity : Activity() {
         if (!::filterToggle.isInitialized) return
         val enabled = if (queryMode == TableQueryMode.FILTERING) filterEnabled else flagEnabled
         val modeName = if (queryMode == TableQueryMode.FILTERING) "Filter" else "Flag"
-        filterToggle.text = "$modeName ${if (enabled) "ON" else "OFF"}"
+        applyActionIcon(filterToggle, "$modeName ${if (enabled) "ON" else "OFF"}", if (queryMode == TableQueryMode.FILTERING) "Filtering.png" else "Flagging.png")
         filterToggle.setTextColor(if (enabled) PRIMARY else MUTED)
         filterToggle.background = if (enabled) activeButtonBackground(PRIMARY) else inactiveActionBackground(PRIMARY)
         if (::filterInput.isInitialized) filterInput.hint = "SELECT * WHERE …"
         if (::filteringMethodButton.isInitialized) {
-            filteringMethodButton.text = selectedFlagRule?.name?.takeIf { queryMode == TableQueryMode.FLAGGING }
+            val methodLabel = selectedFlagRule?.name?.takeIf { queryMode == TableQueryMode.FLAGGING }
                 ?: if (queryMode == TableQueryMode.FILTERING) "Filtering method" else "Flagging method"
+            applyActionIcon(filteringMethodButton, methodLabel, if (queryMode == TableQueryMode.FILTERING) "Filtering.png" else "Flagging.png")
         }
     }
 
@@ -2259,7 +2277,7 @@ class MainActivity : Activity() {
         val parsed = xyz.x3ofiz4.exvia.domain.service.FormulaSupport.parse(target.text.toString())
         val languages = listOf("JavaScript", "SQLite")
         val spinner = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, languages)
+            adapter = iconSpinnerAdapter(languages, "Formula.png")
             backgroundTintList = inputTint()
             setSelection(if (parsed.kind == xyz.x3ofiz4.exvia.domain.service.FormulaSupport.Kind.SQLITE) 1 else 0)
         }
@@ -2378,11 +2396,11 @@ class MainActivity : Activity() {
             }
             row.addView(choose, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             row.addView(TextView(this).apply {
-                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this, textScale = settings.textScale)
+                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this, textScale = settings.textScale); applyActionIcon(this, "Edit", "Edit.png")
                 setOnClickListener { managerDialog?.dismiss(); editFilterSnippet(snippet) }
             }, LinearLayout.LayoutParams(dp(48), dp(34)))
             row.addView(TextView(this).apply {
-                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true, textScale = settings.textScale)
+                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true, textScale = settings.textScale); applyActionIcon(this, "Delete", "Delete.png")
                 setOnClickListener {
                     managerDialog?.dismiss()
                     filterSnippets.removeAll { it.id == snippet.id }
@@ -2521,11 +2539,11 @@ class MainActivity : Activity() {
                 }
             }, LinearLayout.LayoutParams(dp(42), dp(34)))
             row.addView(TextView(this).apply {
-                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this)
+                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png")
                 setOnClickListener { managerDialog?.dismiss(); editTableStyleRule(rule, mapping = false) }
             }, LinearLayout.LayoutParams(dp(48), dp(34)))
             row.addView(TextView(this).apply {
-                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true)
+                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png")
                 setOnClickListener {
                     flaggingRulesDraft.removeAll { it.id == rule.id }
                     if (selectedFlagRule?.id == rule.id) { selectedFlagRule = null; flagEnabled = false }
@@ -2582,7 +2600,7 @@ class MainActivity : Activity() {
             BuiltinExamples.colorMappingRules.forEach { example ->
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 row.addView(infoText(example.name), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { dialog?.dismiss(); editTableStyleRule(null, mapping = true, template = example) } }, LinearLayout.LayoutParams(dp(52), dp(30)))
+                row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Use", "Use.png"); setOnClickListener { dialog?.dismiss(); editTableStyleRule(null, mapping = true, template = example) } }, LinearLayout.LayoutParams(dp(52), dp(30)))
                 box.addView(row, matchWidth())
             }
         }, spacedMatchWidth(5))
@@ -2601,11 +2619,11 @@ class MainActivity : Activity() {
                 }
             }, LinearLayout.LayoutParams(dp(42), dp(34)))
             row.addView(TextView(this).apply {
-                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this)
+                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png")
                 setOnClickListener { dialog?.dismiss(); editTableStyleRule(rule, mapping = true) }
             }, LinearLayout.LayoutParams(dp(48), dp(34)))
             row.addView(TextView(this).apply {
-                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true)
+                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png")
                 setOnClickListener { colorMappingsDraft.removeAll { it.id == rule.id }; persistTableRules("Color Mapping removed."); dialog?.dismiss(); showColorMappingManager() }
             }, LinearLayout.LayoutParams(dp(34), dp(34)))
             list.addView(row, matchWidth())
@@ -2709,7 +2727,7 @@ class MainActivity : Activity() {
         keys.forEach { key ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             row.addView(infoText(key).apply { setTextColor(WHITE) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT,1f))
-            row.addView(TextView(this).apply { text="×"; gravity=Gravity.CENTER; setTextColor(RED); AppFonts.apply(this,bold=true); setOnClickListener { confirmRemoveFieldDirect(key) } }, LinearLayout.LayoutParams(dp(40),dp(32)))
+            row.addView(TextView(this).apply { text="×"; gravity=Gravity.CENTER; setTextColor(RED); AppFonts.apply(this,bold=true); applyActionIcon(this,"Delete","Delete.png"); setOnClickListener { confirmRemoveFieldDirect(key) } }, LinearLayout.LayoutParams(dp(40),dp(32)))
             list.addView(row, matchWidth())
         }
         val dialog=AlertDialog.Builder(this).setTitle("Fields").setView(ScrollView(this).apply{addView(list,matchWidth())}).setNegativeButton("Close",null).create()
@@ -2726,7 +2744,7 @@ class MainActivity : Activity() {
         imaginaryFieldsDraft.forEach { field ->
             val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
             row.addView(infoText(field.name).apply{setTextColor(PRIMARY);setOnClickListener{dialog.dismiss();promptAddImaginaryField(existing=field)}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f))
-            row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);setOnClickListener{dialog.dismiss();confirmRemoveImaginaryDirect(field)}},LinearLayout.LayoutParams(dp(40),dp(32)))
+            row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);applyActionIcon(this,"Delete","Delete.png");setOnClickListener{dialog.dismiss();confirmRemoveImaginaryDirect(field)}},LinearLayout.LayoutParams(dp(40),dp(32)))
             list.addView(row,matchWidth())
         }
         showDialog(dialog)
@@ -2927,9 +2945,9 @@ class MainActivity : Activity() {
                     persistImaginaryFields("Imaginary field updated."); dialog?.dismiss(); showImaginaryFieldManager()
                 }
             }, LinearLayout.LayoutParams(dp(42), dp(32)))
-            row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { dialog?.dismiss(); promptAddImaginaryField(field) } }, LinearLayout.LayoutParams(dp(48), dp(32)))
+            row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png"); applyActionIcon(this, "Edit", "Edit.png"); setOnClickListener { dialog?.dismiss(); promptAddImaginaryField(field) } }, LinearLayout.LayoutParams(dp(48), dp(32)))
             row.addView(TextView(this).apply {
-                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true)
+                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png")
                 setOnClickListener {
                     imaginaryFieldsDraft.removeAll { it.id == field.id }
                     persistImaginaryFields("Imaginary field removed."); dialog?.dismiss(); showImaginaryFieldManager()
@@ -3705,13 +3723,13 @@ class MainActivity : Activity() {
             build(content)
         }
         val header = TextView(this).apply {
-            text = if (initiallyOpen) "− $title" else "+ $title"
             textSize = 16f
             setTextColor(if (initiallyOpen) PRIMARY else WHITE)
             setPadding(dp(9), dp(6), dp(9), dp(6))
             minHeight = dp(34)
             background = if (initiallyOpen) activeButtonBackground(PRIMARY) else noBorderBackground()
             AppFonts.apply(this, bold = true)
+            applyActionIcon(this, title, endAssetName = if (initiallyOpen) "ChevronUp.png" else "ChevronDown.png")
             setOnClickListener {
                 val opening = content.visibility != View.VISIBLE
                 if (opening) {
@@ -3722,7 +3740,7 @@ class MainActivity : Activity() {
                     setPlotViewsActive(content, false)
                     content.visibility = View.GONE
                 }
-                text = if (opening) "− $title" else "+ $title"
+                applyActionIcon(this, title, endAssetName = if (opening) "ChevronUp.png" else "ChevronDown.png")
                 setTextColor(if (opening) PRIMARY else WHITE)
                 background = if (opening) activeButtonBackground(PRIMARY) else noBorderBackground()
             }
@@ -3822,11 +3840,11 @@ class MainActivity : Activity() {
                 setOnClickListener { dialog?.dismiss(); executeFileScript(script) }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             row.addView(TextView(this).apply {
-                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this)
+                text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png")
                 setOnClickListener { dialog?.dismiss(); editFileScript(script) }
             }, LinearLayout.LayoutParams(dp(48), dp(32)))
             row.addView(TextView(this).apply {
-                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true)
+                text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png")
                 setOnClickListener {
                     fileScriptsDraft.removeAll { it.id == script.id }
                     persistFileScripts("File script removed.")
@@ -4109,18 +4127,21 @@ class MainActivity : Activity() {
             it.background = inactiveActionBackground(PRIMARY)
             it.minHeight = dp(34)
             AppFonts.apply(it, bold = true)
+            applyActionIcon(it, it.text.toString())
         }
         dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.let {
             it.setTextColor(MUTED)
             it.background = inactiveActionBackground(SECONDARY)
             it.minHeight = dp(34)
             AppFonts.apply(it)
+            applyActionIcon(it, it.text.toString())
         }
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.let {
             it.setTextColor(MUTED)
             it.background = inactiveActionBackground(SECONDARY)
             it.minHeight = dp(34)
             AppFonts.apply(it)
+            applyActionIcon(it, it.text.toString())
         }
     }
 
@@ -4147,7 +4168,6 @@ class MainActivity : Activity() {
     )
 
     private fun styledButton(label: String, accent: Int = PRIMARY): Button = Button(this).apply {
-        text = label
         isAllCaps = false
         setTextColor(WHITE)
         background = inactiveActionBackground(accent)
@@ -4155,7 +4175,33 @@ class MainActivity : Activity() {
         minHeight = dp(34)
         minimumHeight = dp(34)
         AppFonts.apply(this, bold = true)
+        applyActionIcon(this, label)
     }
+
+    private fun applyActionIcon(view: TextView, label: String, assetName: String = UiIconSupport.assetFor(label), endAssetName: String? = null) {
+        UiIconSupport.apply(
+            view = view,
+            label = label,
+            mode = settings.iconMode,
+            primary = PRIMARY,
+            iconSizePx = dp(16),
+            drawablePaddingPx = dp(5),
+            assetName = assetName,
+            endAssetName = endAssetName,
+        )
+    }
+
+    private fun iconSpinnerAdapter(items: List<String>, assetName: String): IconSpinnerAdapter = IconSpinnerAdapter(
+        context = this,
+        items = items,
+        iconAsset = assetName,
+        mode = settings.iconMode,
+        primary = PRIMARY,
+        textColor = WHITE,
+        backgroundColor = BLACK,
+        iconSizePx = dp(16),
+        paddingPx = dp(6),
+    )
 
     /** No border at rest; focus/press/selected is the active visual state. */
     private fun inactiveActionBackground(accent: Int): StateListDrawable = StateListDrawable().apply {

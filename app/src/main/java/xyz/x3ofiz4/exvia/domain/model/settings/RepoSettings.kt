@@ -45,6 +45,7 @@ data class RepoSettings(
     val imaginaryFields: List<xyz.x3ofiz4.exvia.domain.model.custom.ImaginaryFieldDefinition>,
     val uiScale: Double,
     val textScale: Double,
+    val iconMode: UiIconMode,
     val rowsPerPage: Int,
     val undoHistoryLimit: Int,
     /** When false, Table CRUD is staged locally until Git → Amend is pressed. */
