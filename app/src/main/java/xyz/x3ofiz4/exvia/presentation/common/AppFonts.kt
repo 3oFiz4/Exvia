@@ -13,6 +13,9 @@ object AppFonts {
     private var cached: Typeface? = null
     private val baseTextSizesPx = WeakHashMap<TextView, Float>()
 
+    /** Runtime scale used by dynamically created views after the initial tree pass. */
+    @Volatile var defaultTextScale: Double = 1.0
+
     fun jetBrains(context: Context): Typeface {
         cached?.let { return it }
         val loaded = try {
@@ -27,12 +30,9 @@ object AppFonts {
     fun apply(textView: TextView, bold: Boolean = false, textScale: Double? = null) {
         val base = jetBrains(textView.context)
         textView.typeface = Typeface.create(base, if (bold) Typeface.BOLD else Typeface.NORMAL)
-        if (textScale != null) {
-            val original = baseTextSizesPx.getOrPut(textView) { textView.textSize }
-            textView.setTextSize(TypedValue.COMPLEX_UNIT_PX, (original * textScale.toFloat()).coerceAtLeast(1f))
-        } else {
-            baseTextSizesPx.putIfAbsent(textView, textView.textSize)
-        }
+        val effectiveScale = textScale ?: defaultTextScale
+        val original = baseTextSizesPx.getOrPut(textView) { textView.textSize }
+        textView.setTextSize(TypedValue.COMPLEX_UNIT_PX, (original * effectiveScale.toFloat()).coerceAtLeast(1f))
     }
 
     fun applyToTree(view: View, textScale: Double = 1.0) {

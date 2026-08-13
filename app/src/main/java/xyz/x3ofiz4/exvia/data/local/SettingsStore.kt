@@ -112,12 +112,21 @@ class SettingsStore(context: Context) {
             financeColumns = parseColumnList(prefs.getString(KEY_FINANCE_COLUMNS, "price") ?: "price"),
             customMetrics = parseCustomMetrics(prefs.getString(KEY_CUSTOM_METRICS, "[]") ?: "[]"),
             customPlots = parseCustomPlots(prefs.getString(KEY_CUSTOM_PLOTS, "[]") ?: "[]"),
+            scriptGroups = parseScriptGroups(prefs.getString(KEY_SCRIPT_GROUPS, "[]") ?: "[]").let { groups ->
+                (listOf(ScriptGroupDefinition(DEFAULT_SCRIPT_GROUP_ID, "Default")) + groups.filterNot { it.id == DEFAULT_SCRIPT_GROUP_ID }).distinctBy { it.id }
+            },
+            environmentVariables = parseEnvironmentVariables(prefs.getString(KEY_ENVIRONMENT_VARIABLES, "[]") ?: "[]"),
+            notificationRules = parseNotificationRules(prefs.getString(KEY_NOTIFICATION_RULES, "[]") ?: "[]"),
+            schemaRules = parseSchemaRules(prefs.getString(KEY_SCHEMA_RULES, "[]") ?: "[]"),
+            metricColorMappings = parseMetricColorRules(prefs.getString(KEY_METRIC_COLOR_MAPPINGS, "[]") ?: "[]"),
+            customMetricInputs = parseStringMap(prefs.getString(KEY_CUSTOM_METRIC_INPUTS, "{}") ?: "{}"),
             fileScripts = parseFileScripts(prefs.getString(KEY_FILE_SCRIPTS, "[]") ?: "[]"),
             imaginaryFields = parseImaginaryFields(prefs.getString(KEY_IMAGINARY_FIELDS, "[]") ?: "[]"),
             uiScale = prefs.getString(KEY_UI_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.60) ?: 1.0,
             textScale = prefs.getString(KEY_TEXT_SCALE, "1.0")?.toDoubleOrNull()?.coerceIn(0.70, 1.80) ?: 1.0,
             rowsPerPage = prefs.getString(KEY_ROWS_PER_PAGE, "25")?.toIntOrNull()?.coerceIn(1, 500) ?: 25,
             undoHistoryLimit = prefs.getString(KEY_UNDO_HISTORY_LIMIT, "50")?.toIntOrNull()?.coerceIn(1, 50) ?: 50,
+            automaticAmend = prefs.getBoolean(KEY_AUTOMATIC_AMEND, true),
             themePreset = preset,
             palette = palette,
             plotTheme = plotTheme,
@@ -147,12 +156,19 @@ class SettingsStore(context: Context) {
             .putString(KEY_FINANCE_COLUMNS, settings.financeColumns.joinToString(", "))
             .putString(KEY_CUSTOM_METRICS, customMetricsToJson(settings.customMetrics))
             .putString(KEY_CUSTOM_PLOTS, customPlotsToJson(settings.customPlots))
+            .putString(KEY_SCRIPT_GROUPS, scriptGroupsToJson(settings.scriptGroups.filterNot { it.id == DEFAULT_SCRIPT_GROUP_ID }))
+            .putString(KEY_ENVIRONMENT_VARIABLES, environmentVariablesToJson(settings.environmentVariables))
+            .putString(KEY_NOTIFICATION_RULES, notificationRulesToJson(settings.notificationRules))
+            .putString(KEY_SCHEMA_RULES, schemaRulesToJson(settings.schemaRules))
+            .putString(KEY_METRIC_COLOR_MAPPINGS, metricColorRulesToJson(settings.metricColorMappings))
+            .putString(KEY_CUSTOM_METRIC_INPUTS, JSONObject(settings.customMetricInputs).toString())
             .putString(KEY_FILE_SCRIPTS, fileScriptsToJson(settings.fileScripts))
             .putString(KEY_IMAGINARY_FIELDS, imaginaryFieldsToJson(settings.imaginaryFields))
             .putString(KEY_UI_SCALE, settings.uiScale.toString())
             .putString(KEY_TEXT_SCALE, settings.textScale.toString())
             .putString(KEY_ROWS_PER_PAGE, settings.rowsPerPage.coerceIn(1, 500).toString())
             .putString(KEY_UNDO_HISTORY_LIMIT, settings.undoHistoryLimit.coerceIn(1, 50).toString())
+            .putBoolean(KEY_AUTOMATIC_AMEND, settings.automaticAmend)
             .putString(KEY_THEME_PRESET, settings.themePreset.id)
             .putString(KEY_PRIMARY, settings.palette.primary)
             .putString(KEY_SECONDARY, settings.palette.secondary)
@@ -217,6 +233,12 @@ class SettingsStore(context: Context) {
         private const val KEY_FINANCE_COLUMNS = "finance_columns"
         private const val KEY_CUSTOM_METRICS = "custom_metrics"
         private const val KEY_CUSTOM_PLOTS = "custom_plots"
+        private const val KEY_SCRIPT_GROUPS = "script_groups"
+        private const val KEY_ENVIRONMENT_VARIABLES = "environment_variables"
+        private const val KEY_NOTIFICATION_RULES = "notification_rules"
+        private const val KEY_SCHEMA_RULES = "schema_rules"
+        private const val KEY_METRIC_COLOR_MAPPINGS = "metric_color_mappings"
+        private const val KEY_CUSTOM_METRIC_INPUTS = "custom_metric_inputs"
         private const val KEY_IMAGINARY_FIELDS = "imaginary_fields"
         private const val KEY_FILTER_SNIPPETS = "filter_snippets"
         private const val KEY_REPO_INIT_ASKED = "repo_initialization_asked"
@@ -225,6 +247,7 @@ class SettingsStore(context: Context) {
         private const val KEY_TEXT_SCALE = "text_scale"
         private const val KEY_ROWS_PER_PAGE = "rows_per_page"
         private const val KEY_UNDO_HISTORY_LIMIT = "undo_history_limit"
+        private const val KEY_AUTOMATIC_AMEND = "automatic_amend"
         private const val KEY_FILE_SCRIPTS = "file_scripts"
         private const val KEY_THEME_PRESET = "theme_preset"
         private const val KEY_PRIMARY = "theme_primary"
@@ -301,6 +324,7 @@ class SettingsStore(context: Context) {
                 put("textScale", settings.textScale)
                 put("rowsPerPage", settings.rowsPerPage)
                 put("undoHistoryLimit", settings.undoHistoryLimit)
+                put("automaticAmend", settings.automaticAmend)
             })
             put("theme", JSONObject().apply {
                 put("preset", settings.themePreset.id)
@@ -341,6 +365,12 @@ class SettingsStore(context: Context) {
                 put("customPlots", ".exvia/custom-plots.json")
                 put("fileScripts", ".exvia/file-scripts.json")
                 put("imaginaryFields", ".exvia/imaginary-fields.json")
+                put("scriptGroups", ".exvia/script-groups.json")
+                put("environmentVariables", ".exvia/environment-variables.json")
+                put("notifications", ".exvia/notification-rules.json")
+                put("schemaRules", ".exvia/schema-rules.json")
+                put("metricColorMappings", ".exvia/metric-color-mappings.json")
+                put("customMetricInputs", ".exvia/custom-metric-inputs.json")
             })
         }.toString(2) + "\n"
 
@@ -445,6 +475,123 @@ class SettingsStore(context: Context) {
                 put("enabled", item.enabled)
             }) }
         }.toString()
+
+
+        fun scriptGroupsFileJson(items: List<ScriptGroupDefinition>): String = JSONObject().apply {
+            put("format", "exvia-script-groups-v1")
+            put("items", JSONArray(scriptGroupsToJson(items.filterNot { it.id == DEFAULT_SCRIPT_GROUP_ID })))
+        }.toString(2) + "\n"
+
+        fun environmentVariablesFileJson(items: List<EnvironmentVariableDefinition>): String = JSONObject().apply {
+            put("format", "exvia-environment-variables-v1")
+            put("items", JSONArray(environmentVariablesToJson(items)))
+        }.toString(2) + "\n"
+
+        fun notificationRulesFileJson(items: List<NotificationRule>): String = JSONObject().apply {
+            put("format", "exvia-notification-rules-v1")
+            put("items", JSONArray(notificationRulesToJson(items)))
+        }.toString(2) + "\n"
+
+        fun schemaRulesFileJson(items: List<SchemaRuleDefinition>): String = JSONObject().apply {
+            put("format", "exvia-schema-rules-v1")
+            put("items", JSONArray(schemaRulesToJson(items)))
+        }.toString(2) + "\n"
+
+        fun metricColorMappingsFileJson(items: List<MetricColorRule>): String = JSONObject().apply {
+            put("format", "exvia-metric-color-mappings-v1")
+            put("items", JSONArray(metricColorRulesToJson(items)))
+        }.toString(2) + "\n"
+
+        fun customMetricInputsFileJson(items: Map<String, String>): String = JSONObject().apply {
+            put("format", "exvia-custom-metric-inputs-v1")
+            put("items", JSONObject(items))
+        }.toString(2) + "\n"
+
+        fun environmentPayload(items: List<EnvironmentVariableDefinition>): JSONObject = JSONObject().apply {
+            items.filter { it.enabled && it.name.isNotBlank() }.forEach { item ->
+                put(item.name, JSONObject().apply {
+                    put("script", item.initializerScript)
+                    put("valueJson", item.valueJson)
+                })
+            }
+        }
+
+        private fun parseScriptGroups(text: String): List<ScriptGroupDefinition> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim()
+                if (name.isBlank()) return@mapNotNull null
+                ScriptGroupDefinition(obj.optString("id").ifBlank { UUID.randomUUID().toString() }, name)
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun scriptGroupsToJson(items: List<ScriptGroupDefinition>): String = JSONArray().apply {
+            items.forEach { put(JSONObject().apply { put("id", it.id); put("name", it.name) }) }
+        }.toString()
+
+        private fun parseEnvironmentVariables(text: String): List<EnvironmentVariableDefinition> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim()
+                if (name.isBlank()) return@mapNotNull null
+                EnvironmentVariableDefinition(
+                    id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                    name = name,
+                    initializerScript = obj.optString("initializerScript", "return null;"),
+                    valueJson = obj.optString("valueJson", "null"),
+                    enabled = obj.optBoolean("enabled", true),
+                )
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun environmentVariablesToJson(items: List<EnvironmentVariableDefinition>): String = JSONArray().apply {
+            items.forEach { item -> put(JSONObject().apply {
+                put("id", item.id); put("name", item.name); put("initializerScript", item.initializerScript)
+                put("valueJson", item.valueJson); put("enabled", item.enabled)
+            }) }
+        }.toString()
+
+        private fun parseNotificationRules(text: String): List<NotificationRule> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim(); val event = obj.optString("eventName").trim(); val script = obj.optString("script")
+                if (name.isBlank() || event.isBlank() || script.isBlank()) return@mapNotNull null
+                NotificationRule(obj.optString("id").ifBlank { UUID.randomUUID().toString() }, name, event, script, obj.optBoolean("enabled", true))
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun notificationRulesToJson(items: List<NotificationRule>): String = JSONArray().apply {
+            items.forEach { item -> put(JSONObject().apply { put("id",item.id); put("name",item.name); put("eventName",item.eventName); put("script",item.script); put("enabled",item.enabled) }) }
+        }.toString()
+
+        private fun parseSchemaRules(text: String): List<SchemaRuleDefinition> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj=arr.optJSONObject(i)?:return@mapNotNull null; val name=obj.optString("name").trim(); val script=obj.optString("script")
+                if(name.isBlank()||script.isBlank()) return@mapNotNull null
+                SchemaRuleDefinition(obj.optString("id").ifBlank { UUID.randomUUID().toString() },name,script,obj.optBoolean("enabled",true))
+            }
+        } catch (_: Exception) { emptyList() }
+
+        private fun schemaRulesToJson(items: List<SchemaRuleDefinition>): String = JSONArray().apply {
+            items.forEach { item -> put(JSONObject().apply { put("id",item.id); put("name",item.name); put("script",item.script); put("enabled",item.enabled) }) }
+        }.toString()
+
+        private fun parseMetricColorRules(text: String): List<MetricColorRule> = try {
+            val arr=JSONArray(text)
+            (0 until arr.length()).mapNotNull { i -> val obj=arr.optJSONObject(i)?:return@mapNotNull null; val name=obj.optString("name").trim(); val metric=obj.optString("metricName").trim(); val script=obj.optString("script"); if(name.isBlank()||metric.isBlank()||script.isBlank()) return@mapNotNull null; MetricColorRule(obj.optString("id").ifBlank { UUID.randomUUID().toString() },name,metric,script,obj.optBoolean("enabled",true)) }
+        } catch (_: Exception) { emptyList() }
+
+        private fun metricColorRulesToJson(items: List<MetricColorRule>): String = JSONArray().apply {
+            items.forEach { item -> put(JSONObject().apply { put("id",item.id); put("name",item.name); put("metricName",item.metricName); put("script",item.script); put("enabled",item.enabled) }) }
+        }.toString()
+
+        private fun parseStringMap(text: String): Map<String,String> = try {
+            val obj=JSONObject(text); val out=linkedMapOf<String,String>(); val keys=obj.keys(); while(keys.hasNext()){ val k=keys.next(); out[k]=obj.optString(k) }; out
+        } catch (_: Exception) { emptyMap() }
 
         private fun parseCustomUiThemes(text: String): List<NamedUiTheme> = try {
             val arr = JSONArray(text)
@@ -551,13 +698,14 @@ class SettingsStore(context: Context) {
                     name = name,
                     script = script,
                     enabled = obj.optBoolean("enabled", true),
+                    groupId = obj.optString("groupId", DEFAULT_SCRIPT_GROUP_ID).ifBlank { DEFAULT_SCRIPT_GROUP_ID },
                 )
             }
         } catch (_: Exception) { emptyList() }
 
         private fun customMetricsToJson(items: List<CustomMetricDefinition>): String = JSONArray().apply {
             items.forEach { item -> put(JSONObject().apply {
-                put("id", item.id); put("name", item.name); put("script", item.script); put("enabled", item.enabled)
+                put("id", item.id); put("name", item.name); put("script", item.script); put("enabled", item.enabled); put("groupId", item.groupId)
             }) }
         }.toString()
 
@@ -584,6 +732,7 @@ class SettingsStore(context: Context) {
                     script = script,
                     engine = engine,
                     enabled = obj.optBoolean("enabled", true),
+                    groupId = obj.optString("groupId", DEFAULT_SCRIPT_GROUP_ID).ifBlank { DEFAULT_SCRIPT_GROUP_ID },
                 )
             }
         } catch (_: Exception) { emptyList() }
@@ -595,6 +744,7 @@ class SettingsStore(context: Context) {
                 put("script", item.script)
                 put("engine", item.engine)
                 put("enabled", item.enabled)
+                put("groupId", item.groupId)
             }) }
         }.toString()
 

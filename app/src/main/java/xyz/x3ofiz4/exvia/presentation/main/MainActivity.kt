@@ -17,6 +17,7 @@ import xyz.x3ofiz4.exvia.R
 import xyz.x3ofiz4.exvia.app.ExviaApplication
 import xyz.x3ofiz4.exvia.app.ExviaContainer
 import xyz.x3ofiz4.exvia.presentation.statistics.StatisticsViewModel
+import xyz.x3ofiz4.exvia.presentation.notification.NotificationDispatcher
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -71,6 +72,12 @@ class MainActivity : Activity() {
 
     private enum class Tab { TABLE, STAT, FILES }
     private data class ThemeChoice(val id: String, val label: String)
+    private data class CustomStatNode(
+        val name: String,
+        val fullPath: String,
+        val groupIds: MutableList<String> = mutableListOf(),
+        val children: LinkedHashMap<String, CustomStatNode> = linkedMapOf(),
+    )
 
     private lateinit var container: ExviaContainer
     private lateinit var mainViewModel: MainViewModel
@@ -83,6 +90,10 @@ class MainActivity : Activity() {
     private lateinit var plotRuntime: PlotWebRuntime
     private lateinit var customMetricEngine: CustomMetricEngine
     private lateinit var fieldFormulaEngine: FieldFormulaEngine
+    private lateinit var fieldSchemaEngine: FieldSchemaEngine
+    private lateinit var metricColorEngine: MetricColorEngine
+    private lateinit var notificationScriptEngine: NotificationScriptEngine
+    private lateinit var notificationDispatcher: NotificationDispatcher
     private val uiHandler = Handler(Looper.getMainLooper())
 
     private val palette get() = settings.palette
@@ -93,6 +104,9 @@ class MainActivity : Activity() {
     private val MUTED get() = palette.quinaryColor()
     private val WHITE get() = palette.senaryColor()
     private val RED = Color.rgb(247, 35, 35)
+    private val LOG_GREEN = Color.rgb(52, 199, 89)
+    private val LOG_YELLOW = Color.rgb(245, 197, 66)
+    private val LOG_BLUE = Color.rgb(41, 182, 246)
     private val STAT_MEAN = Color.rgb(255, 176, 0)
     private val STAT_MEDIAN = Color.rgb(0, 194, 255)
     private val STAT_QUARTILE = Color.rgb(169, 112, 255)
@@ -109,6 +123,9 @@ class MainActivity : Activity() {
     private lateinit var statContent: LinearLayout
     private lateinit var filesScreen: LinearLayout
     private lateinit var dynamicForm: LinearLayout
+    private lateinit var tableEntryControls: LinearLayout
+    private lateinit var tableControlsToggle: Button
+    private var tableControlsVisible = true
     private lateinit var table: TableLayout
     private lateinit var filesList: LinearLayout
     private lateinit var filterInput: EditText
@@ -123,6 +140,7 @@ class MainActivity : Activity() {
     private lateinit var statTabButton: Button
     private lateinit var filesTabButton: Button
     private lateinit var resyncButton: TextView
+    private lateinit var gitButton: TextView
     private lateinit var titleText: TextView
     private lateinit var filteringMethodButton: TextView
     private lateinit var previousPageButton: Button
@@ -172,10 +190,16 @@ class MainActivity : Activity() {
     private lateinit var textScaleSetting: EditText
     private lateinit var rowsPerPageSetting: EditText
     private lateinit var undoHistoryLimitSetting: EditText
-    private lateinit var customMetricList: LinearLayout
-    private lateinit var customPlotList: LinearLayout
+    private lateinit var automaticAmendSpinner: Spinner
+    private lateinit var customStatList: LinearLayout
     private var customMetricsDraft = mutableListOf<CustomMetricDefinition>()
     private var customPlotsDraft = mutableListOf<CustomPlotDefinition>()
+    private var scriptGroupsDraft = mutableListOf<ScriptGroupDefinition>()
+    private var environmentVariablesDraft = mutableListOf<EnvironmentVariableDefinition>()
+    private var notificationRulesDraft = mutableListOf<NotificationRule>()
+    private var schemaRulesDraft = mutableListOf<SchemaRuleDefinition>()
+    private var metricColorMappingsDraft = mutableListOf<MetricColorRule>()
+    private var customMetricInputsDraft = mutableMapOf<String, String>()
     private var fileScriptsDraft = mutableListOf<FileScriptDefinition>()
     private var customUiThemesDraft = mutableListOf<NamedUiTheme>()
     private var customPlotThemesDraft = mutableListOf<NamedPlotTheme>()
@@ -210,6 +234,20 @@ class MainActivity : Activity() {
     private var paginatedTableData = TableData(emptyList(), emptyList(), null, null, null, null)
     private var currentPageIndex = 0
     private var pageOverlayHideRunnable: Runnable? = null
+    private var hasStagedChanges = false
+    private var hasAnyStagedChanges = false
+    private var gitDialog: AlertDialog? = null
+    private var gitCommitList: LinearLayout? = null
+    private var gitPageText: TextView? = null
+    private var gitPreviousButton: Button? = null
+    private var gitNextButton: Button? = null
+    private var gitHistoryPage = 1
+    private var schemaConfigCache = mapOf<String, FieldSchemaEngine.FieldConfig>()
+    private var schemaConfigSignature = ""
+    private var metricColorCache = mapOf<String, MetricColorEngine.Colors>()
+    private var metricColorSignature = ""
+    private var lastEnvironmentSnapshot = ""
+    private var environmentSaveRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -219,9 +257,16 @@ class MainActivity : Activity() {
 
         val settingsState = settingsViewModel.state.value
         settings = settingsState.settings
+        AppFonts.defaultTextScale = settings.textScale
         developerMode = settingsState.developerMode
         customMetricsDraft = settings.customMetrics.toMutableList()
         customPlotsDraft = settings.customPlots.toMutableList()
+        scriptGroupsDraft = settings.scriptGroups.toMutableList().ifEmpty { mutableListOf(ScriptGroupDefinition(DEFAULT_SCRIPT_GROUP_ID, "Default")) }
+        environmentVariablesDraft = settings.environmentVariables.toMutableList()
+        notificationRulesDraft = settings.notificationRules.toMutableList()
+        schemaRulesDraft = settings.schemaRules.toMutableList()
+        metricColorMappingsDraft = settings.metricColorMappings.toMutableList()
+        customMetricInputsDraft = settings.customMetricInputs.toMutableMap()
         fileScriptsDraft = settings.fileScripts.toMutableList()
         customUiThemesDraft = settings.customUiThemes.toMutableList()
         customPlotThemesDraft = settings.customPlotThemes.toMutableList()
@@ -239,12 +284,20 @@ class MainActivity : Activity() {
             View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         } else 0
 
-        plotRuntime = PlotWebRuntime(this)
+        plotRuntime = PlotWebRuntime(
+            this,
+            environmentProvider = { xyz.x3ofiz4.exvia.data.local.SettingsStore.environmentPayload(environmentVariablesDraft) },
+            onEnvironmentChanged = { snapshot -> runOnUiThread { persistEnvironmentSnapshot(snapshot) } },
+        )
         customMetricEngine = CustomMetricEngine(plotRuntime) { settings.plotTheme }
         fieldFormulaEngine = FieldFormulaEngine(plotRuntime) { settings.plotTheme }
+        fieldSchemaEngine = FieldSchemaEngine(plotRuntime)
+        metricColorEngine = MetricColorEngine(plotRuntime)
+        notificationScriptEngine = NotificationScriptEngine(plotRuntime)
+        notificationDispatcher = NotificationDispatcher(this)
         setContentView(buildUi())
         bindViewModels()
-        window.decorView.post { plotRuntime.prewarm() }
+        window.decorView.post { plotRuntime.prewarm(); uiHandler.postDelayed({ initializeEnvironmentRuntime() }, 180L) }
 
         when {
             !settingsState.hasToken -> {
@@ -277,6 +330,8 @@ class MainActivity : Activity() {
                 when (effect) {
                     is MainEffect.Error -> handleError(effect.throwable as? Exception ?: Exception(effect.throwable), effect.prefix)
                     is MainEffect.ToastMessage -> Toast.makeText(this, effect.message, Toast.LENGTH_SHORT).show()
+                    is MainEffect.GitHistoryLoaded -> renderGitHistory(effect.page)
+                    is MainEffect.AutomationEvent -> triggerAutomationEvent(effect.name, effect.payload)
                 }
             }
         }
@@ -286,7 +341,8 @@ class MainActivity : Activity() {
                     is SettingsEffect.Error -> handleError(effect.throwable as? Exception ?: Exception(effect.throwable), effect.prefix)
                     is SettingsEffect.Reload -> {
                         Toast.makeText(this, effect.message, Toast.LENGTH_LONG).show()
-                        recreate()
+                        triggerAutomationEvent("event.save", mapOf("message" to effect.message))
+                        uiHandler.postDelayed({ recreate() }, 700L)
                     }
                     is SettingsEffect.ReportCreated -> {
                         setBusy(false)
@@ -319,6 +375,8 @@ class MainActivity : Activity() {
         selectedFlagRule = state.activeFlagRule
         tableStyles = state.tableStyles
         imaginaryKeys = state.imaginaryKeys
+        hasStagedChanges = state.hasStagedChanges
+        hasAnyStagedChanges = state.hasAnyStagedChanges
         busy = state.busy
         if (::undoButton.isInitialized) { undoButton.isEnabled = !state.busy && state.canUndo; undoButton.alpha = if (undoButton.isEnabled) 1f else 0.38f }
         if (::redoButton.isInitialized) { redoButton.isEnabled = !state.busy && state.canRedo; redoButton.alpha = if (redoButton.isEnabled) 1f else 0.38f }
@@ -344,6 +402,7 @@ class MainActivity : Activity() {
             renderFiles()
             updateFilterToggle()
             AppFonts.applyToTree(drawerRoot, settings.textScale)
+            scheduleSchemaEvaluation(state.sourceData)
             scheduleImaginaryFieldEvaluation(state)
         }
         setBusy(state.busy)
@@ -442,6 +501,16 @@ class MainActivity : Activity() {
             setOnClickListener { handleTitleTap() }
         }
         titleRow.addView(titleText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        gitButton = TextView(this).apply {
+            text = "Git"
+            setTextColor(PRIMARY)
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            background = noBorderBackground()
+            AppFonts.apply(this, bold = true)
+            setOnClickListener { if (!busy) showGitPanel() }
+        }
+        titleRow.addView(gitButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)).apply { marginEnd = dp(3) })
         resyncButton = TextView(this).apply {
             text = "Re-sync"
             setTextColor(PRIMARY)
@@ -462,9 +531,14 @@ class MainActivity : Activity() {
         content.addView(titleRow, matchWidth())
 
         statusText = TextView(this).apply {
-            setTextColor(MUTED)
+            setTextColor(LOG_BLUE)
             setPadding(0, dp(4), 0, dp(10))
             AppFonts.apply(this)
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                override fun afterTextChanged(s: Editable?) { setTextColor(statusColor(s?.toString().orEmpty())) }
+            })
         }
         content.addView(statusText, matchWidth())
 
@@ -510,54 +584,43 @@ class MainActivity : Activity() {
         }
         addView(selectedFileText, matchWidth())
 
+        tableControlsToggle = styledButton("Hide input controls").apply {
+            setOnClickListener {
+                tableControlsVisible = !tableControlsVisible
+                tableEntryControls.visibility = if (tableControlsVisible) View.VISIBLE else View.GONE
+                text = if (tableControlsVisible) "Hide input controls" else "Show input controls"
+            }
+        }
+        addView(tableControlsToggle, spacedMatchWidth(3))
+
+        tableEntryControls = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(BLACK)
+        }
+        addView(tableEntryControls, matchWidth())
+
         dynamicForm = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(BLACK)
         }
-        addView(dynamicForm, matchWidth())
+        tableEntryControls.addView(dynamicForm, matchWidth())
 
-        val addField = TextView(this@MainActivity).apply {
-            text = "+ Add field"
-            setTextColor(PRIMARY)
-            setPadding(dp(8), dp(9), dp(8), dp(9))
-            AppFonts.apply(this)
-            setOnClickListener { promptAddField() }
-        }
-        addView(addField, matchWidth())
-        val removeField = TextView(this@MainActivity).apply {
-            text = "− Remove field"
-            setTextColor(RED)
-            setPadding(dp(8), dp(4), dp(8), dp(7))
-            AppFonts.apply(this)
-            setOnClickListener { promptRemoveField() }
-        }
-        addView(removeField, matchWidth())
-        val addImaginaryField = TextView(this@MainActivity).apply {
-            text = "+ Add imaginary field"
-            setTextColor(PRIMARY)
-            setPadding(dp(8), dp(7), dp(8), dp(5))
-            AppFonts.apply(this)
-            setOnClickListener { promptAddImaginaryField() }
-        }
-        addView(addImaginaryField, matchWidth())
-        val removeImaginaryField = TextView(this@MainActivity).apply {
-            text = "− Remove imaginary field"
-            setTextColor(RED)
-            setPadding(dp(8), dp(4), dp(8), dp(9))
-            AppFonts.apply(this)
-            setOnClickListener { promptRemoveImaginaryField() }
-        }
-        addView(removeImaginaryField, matchWidth())
+        val fieldOperations = styledButton("Fields").apply { setOnClickListener { showFieldOperationsManager() } }
+        val imaginaryOperations = styledButton("Imaginary fields").apply { setOnClickListener { showImaginaryFieldOperationsManager() } }
+        val operationRow = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+        operationRow.addView(fieldOperations, LinearLayout.LayoutParams(0, dp(32), 1f).apply { marginEnd = dp(3) })
+        operationRow.addView(imaginaryOperations, LinearLayout.LayoutParams(0, dp(32), 1f).apply { marginStart = dp(3) })
+        tableEntryControls.addView(operationRow, spacedMatchWidth(4))
 
         amendButton = styledButton("Amend").apply { setOnClickListener { amend() } }
-        addView(amendButton, spacedMatchWidth(4))
+        tableEntryControls.addView(amendButton, spacedMatchWidth(4))
 
         val historyActions = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
         undoButton = styledButton("Undo").apply { isEnabled = false; alpha = 0.38f; setOnClickListener { if (!busy) mainViewModel.undo(settings) } }
         redoButton = styledButton("Redo").apply { isEnabled = false; alpha = 0.38f; setOnClickListener { if (!busy) mainViewModel.redo(settings) } }
         historyActions.addView(undoButton, LinearLayout.LayoutParams(0, dp(32), 1f).apply { marginEnd = dp(3) })
         historyActions.addView(redoButton, LinearLayout.LayoutParams(0, dp(32), 1f).apply { marginStart = dp(3) })
-        addView(historyActions, spacedMatchWidth(4))
+        tableEntryControls.addView(historyActions, spacedMatchWidth(4))
 
         val filterRow = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -568,8 +631,7 @@ class MainActivity : Activity() {
             isLongClickable = false
             minHeight = dp(30)
             maxHeight = dp(30)
-            setPadding(dp(8), dp
-            (2), dp(8), dp(2))
+            setPadding(dp(8), dp(2), dp(8), dp(2))
             textSize = 12f
             setOnLongClickListener { true }
             addTextChangedListener(object : TextWatcher {
@@ -795,6 +857,10 @@ class MainActivity : Activity() {
         val imaginaryFieldsButton = styledButton("Imaginary fields").apply {
             setOnClickListener { showImaginaryFieldManager() }
         }
+        val environmentButton = styledButton("Variables / ENV").apply { setOnClickListener { showEnvironmentManager() } }
+        val notificationsButton = styledButton("Notifications").apply { setOnClickListener { showNotificationManager() } }
+        val schemaRulesButton = styledButton("Key schema scripts").apply { setOnClickListener { showSchemaRuleManager() } }
+        val metricColorButton = styledButton("Metric Color Mapping").apply { setOnClickListener { showMetricColorManager() } }
         val plotColumns = configField("Columns with plotting enabled", "stats.plot_columns", settings.plotColumns.joinToString(", "), "Comma-separated numeric JSON keys that receive built-in plots. Default: price.")
         plotColumnsSetting = plotColumns.input
         val financeColumns = configField("Columns reported as personal finance", "finance.columns", settings.financeColumns.joinToString(", "), "Comma-separated numeric JSON keys used for personal-finance reports. Default: price.")
@@ -808,6 +874,28 @@ class MainActivity : Activity() {
         rowsPerPageSetting = rowsPerPage.input.apply { inputType = InputType.TYPE_CLASS_NUMBER }
         val undoHistory = configField("Undo/Redo history", "display.undo_history_limit", settings.undoHistoryLimit.toString(), "Maximum Table CRUD undo history retained in memory. Only changed-row deltas are stored. Allowed range: 1–50.")
         undoHistoryLimitSetting = undoHistory.input.apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        automaticAmendSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("Automatic · Commit immediately", "Manual · Stage locally"),
+            )
+            setSelection(if (settings.automaticAmend) 0 else 1)
+            backgroundTintList = inputTint()
+        }
+        val automaticAmendWrapper = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(BLACK)
+            addView(TextView(this@MainActivity).apply {
+                text = "Git amend mode"
+                setTextColor(WHITE)
+                textSize = 12.5f
+                setPadding(dp(4), dp(2), dp(4), dp(2))
+                AppFonts.apply(this, bold = true)
+                tooltipController.attachHold(this, { "Automatic commits each Table CRUD operation immediately. Manual stores Table changes in a persistent local stage until Git → Amend is pressed." })
+            }, matchWidth())
+            addView(automaticAmendSpinner, matchWidth())
+        }
 
         val primary = colorConfigField("Primary", "theme.primary", settings.palette.primary, "Active/focused state and highest-priority outline.")
         primarySetting = primary.input
@@ -914,6 +1002,7 @@ class MainActivity : Activity() {
 
         body.addView(accordion("Interface", tooltip = "Resize the full UI and text independently. Changes take effect after Save settings and reload.") { container ->
             listOf(uiScale.wrapper, textScale.wrapper, rowsPerPage.wrapper, undoHistory.wrapper).forEach { container.addView(it, spacedMatchWidth(5)) }
+            container.addView(automaticAmendWrapper, spacedMatchWidth(5))
         }, spacedMatchWidth(10))
 
         body.addView(accordion("Plotting", tooltip = "Built-in and named custom plot themes used by the D3.js and Observable Plot runtime.") { container ->
@@ -945,28 +1034,30 @@ class MainActivity : Activity() {
                     .forEach { container.addView(it, spacedMatchWidth(5)) }
                 container.addView(infoText("Automatic cell/row styling rules. They use the same SQLite-like matcher as Filtering and are applied whenever the table renders.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
                 container.addView(colorMappingButton, spacedMatchWidth(5))
+                container.addView(metricColorButton, spacedMatchWidth(5))
                 container.addView(imaginaryFieldsButton, spacedMatchWidth(5))
+                container.addView(schemaRulesButton, spacedMatchWidth(5))
             }, spacedMatchWidth(10))
 
-            customMetricList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
-            renderCustomMetricSettings()
-            body.addView(accordion("Custom metric", tooltip = "Create JavaScript metrics evaluated in the shared pre-warmed D3/Observable Plot/Arquero runtime.") { container ->
-                container.addView(infoText("Available modules: d3, Plot, aq, context, theme, helpers, and jsonFile. The editor uses an Ayu syntax theme.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
-                container.addView(customMetricList, matchWidth())
-                container.addView(styledButton("+ Add custom metric").apply { setOnClickListener { editCustomMetric(null) } }, spacedMatchWidth(4))
-            }, spacedMatchWidth(12))
+            body.addView(accordion("Automation & ENV", tooltip = "Persistent JavaScript ENV variables and Android notification rules driven by Exvia events.") { container ->
+                container.addView(infoText("ENV is an Exvia-managed JavaScript environment, not an OS .env file. Use ENV.name.get()/post()/put()/delete() from formulas, plots, metrics, schema rules, and notifications.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+                container.addView(environmentButton, spacedMatchWidth(5))
+                container.addView(notificationsButton, spacedMatchWidth(5))
+            }, spacedMatchWidth(10))
 
-            customPlotList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
-            renderCustomPlotSettings()
-            body.addView(accordion("Custom plot", tooltip = "Write a D3.js or Observable Plot script with Arquero available for dataframe handling.") { container ->
-                container.addView(infoText("The script receives d3, Plot, aq, jsonFile, context, theme, and helpers. Return a DOM/SVG node or append to context.container.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
-                container.addView(customPlotList, matchWidth())
-                container.addView(styledButton("+ Add custom plot").apply { setOnClickListener { editCustomPlot(null) } }, spacedMatchWidth(4))
+            customStatList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
+            renderCustomStatSettings()
+            body.addView(accordion("Custom Stat", tooltip = "Manage custom plots and custom metrics together. Shared Custom Accordions control where both appear in Stat.") { container ->
+                container.addView(infoText("Available modules: d3, Plot, aq, context, theme, helpers, jsonFile, and ENV. Plotting modules are listed before Metrics inside each shared accordion.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+                container.addView(customStatList, matchWidth())
+                val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                actions.addView(styledButton("+ Plot").apply { setOnClickListener { editCustomPlot(null) } }, LinearLayout.LayoutParams(0, dp(34), 1f).apply { marginEnd = dp(3) })
+                actions.addView(styledButton("+ Metric").apply { setOnClickListener { editCustomMetric(null) } }, LinearLayout.LayoutParams(0, dp(34), 1f))
+                container.addView(actions, spacedMatchWidth(4))
             }, spacedMatchWidth(12))
         } else {
-            // Keep late-init properties valid while advanced sections are hidden.
-            customMetricList = LinearLayout(this)
-            customPlotList = LinearLayout(this)
+            // Keep late-init property valid while advanced sections are hidden.
+            customStatList = LinearLayout(this)
         }
 
         body.addView(styledButton("Report").apply { setOnClickListener { showReportDialog() } }, spacedMatchWidth(6))
@@ -1269,192 +1360,334 @@ class MainActivity : Activity() {
             .create().also { showDialog(it) }
     }
 
-    private fun renderCustomMetricSettings() {
-        if (!::customMetricList.isInitialized) return
-        customMetricList.removeAllViews()
+    private fun normalizedScriptGroups(): List<ScriptGroupDefinition> {
+        val default = ScriptGroupDefinition(DEFAULT_SCRIPT_GROUP_ID, "Default")
+        return (listOf(default) + scriptGroupsDraft.filterNot { it.id == DEFAULT_SCRIPT_GROUP_ID }).distinctBy { it.id }
+    }
 
-        customMetricList.addView(accordion("Built-in metric examples", initiallyOpen = false) { examples ->
-            examples.addView(infoText("Templates are disabled until copied. Each receives only jsonFile { name, content }.").apply {
-                setTextColor(MUTED)
-            }, spacedMatchWidth(5))
-            BuiltinExamples.customMetrics.forEach { example ->
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(0, dp(1), 0, dp(1))
-                }
-                row.addView(infoText(example.name).apply { setTextColor(WHITE) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(TextView(this).apply {
-                    text = "Use"
-                    gravity = Gravity.CENTER
-                    setTextColor(PRIMARY)
-                    AppFonts.apply(this, textScale = settings.textScale)
-                    setOnClickListener { editCustomMetric(null, example) }
-                }, LinearLayout.LayoutParams(dp(52), dp(30)))
+    private fun renderCustomStatSettings() {
+        if (!::customStatList.isInitialized) return
+        customStatList.removeAllViews()
+
+        customStatList.addView(accordion("Built-in metric examples", initiallyOpen = false) { examples ->
+            val allExamples = BuiltinExamples.customMetrics + BuiltinExamples.customMetricInputExamples
+            examples.addView(infoText("Ordinary and input-returning metric templates. Using one creates an editable copy in the selected Custom Accordion.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+            allExamples.forEach { example ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                row.addView(infoText(example.name).apply { setTextColor(WHITE); textSize = 12f; AppFonts.apply(this) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editCustomMetric(null, example) } }, LinearLayout.LayoutParams(dp(52), dp(30)))
+                examples.addView(row, matchWidth())
+            }
+        }, spacedMatchWidth(4))
+
+        customStatList.addView(accordion("Built-in plot examples", initiallyOpen = false) { examples ->
+            BuiltinExamples.customPlots.forEach { example ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                row.addView(infoText("${example.name}\n${example.engine}").apply { setTextColor(WHITE); textSize = 12f; AppFonts.apply(this) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editCustomPlot(null, example) } }, LinearLayout.LayoutParams(dp(52), dp(30)))
                 examples.addView(row, matchWidth())
             }
         }, spacedMatchWidth(5))
 
-        customMetricList.addView(infoText("Your custom metrics").apply {
-            setTextColor(PRIMARY)
-            AppFonts.apply(this, bold = true)
-        }, spacedMatchWidth(3))
-        if (customMetricsDraft.isEmpty()) customMetricList.addView(infoText("No custom metrics configured.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
-        customMetricsDraft.forEach { metric ->
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(2), 0, dp(2)) }
-            row.addView(infoText(metric.name).apply { setTextColor(if (metric.enabled) WHITE else MUTED) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            row.addView(TextView(this).apply { text = "Edit"; setTextColor(PRIMARY); gravity = Gravity.CENTER; AppFonts.apply(this); setOnClickListener { editCustomMetric(metric) } }, LinearLayout.LayoutParams(dp(50), dp(32)))
-            row.addView(TextView(this).apply { text = "×"; setTextColor(RED); gravity = Gravity.CENTER; AppFonts.apply(this, bold = true); setOnClickListener { customMetricsDraft.removeAll { it.id == metric.id }; persistCustomMetrics("Custom metric removed."); renderCustomMetricSettings() } }, LinearLayout.LayoutParams(dp(36), dp(32)))
-            customMetricList.addView(row, matchWidth())
+        // One shared manager for Plot + Metric group hierarchy. Keeping the
+        // button here (after examples, before group rows) avoids the duplicate
+        // Custom/Manage Custom Accordions controls from earlier builds.
+        customStatList.addView(styledButton("Custom Accordions").apply {
+            setOnClickListener { showScriptGroupManager() }
+        }, spacedMatchWidth(6))
+
+        normalizedScriptGroups().forEach { group ->
+            val plots = customPlotsDraft.filter { it.groupId == group.id }
+            val metrics = customMetricsDraft.filter { it.groupId == group.id }
+            customStatList.addView(accordion(group.name, initiallyOpen = group.id == DEFAULT_SCRIPT_GROUP_ID) { box ->
+                box.addView(infoText("# Plotting").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(3))
+                if (plots.isEmpty()) box.addView(infoText("No plots in this accordion.").apply { setTextColor(MUTED) }, spacedMatchWidth(3))
+                plots.forEach { plot ->
+                    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                    row.addView(infoText(plot.name).apply { setTextColor(if (plot.enabled) WHITE else MUTED) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editCustomPlot(plot) } }, LinearLayout.LayoutParams(dp(48), dp(30)))
+                    row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); setOnClickListener { customPlotsDraft.removeAll { it.id == plot.id }; persistCustomPlots("Custom plot removed."); renderCustomStatSettings() } }, LinearLayout.LayoutParams(dp(34), dp(30)))
+                    box.addView(row, matchWidth())
+                }
+                box.addView(infoText("# Metrics").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(5))
+                if (metrics.isEmpty()) box.addView(infoText("No metrics in this accordion.").apply { setTextColor(MUTED) }, spacedMatchWidth(3))
+                metrics.forEach { metric ->
+                    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                    row.addView(infoText(metric.name).apply { setTextColor(if (metric.enabled) WHITE else MUTED) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editCustomMetric(metric) } }, LinearLayout.LayoutParams(dp(48), dp(30)))
+                    row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); setOnClickListener { customMetricsDraft.removeAll { it.id == metric.id }; persistCustomMetrics("Custom metric removed."); renderCustomStatSettings() } }, LinearLayout.LayoutParams(dp(34), dp(30)))
+                    box.addView(row, matchWidth())
+                }
+            }, matchWidth())
+        }
+    }
+
+    private fun groupSpinner(selectedId: String): Spinner {
+        val groups = normalizedScriptGroups()
+        return Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, groups.map { it.name })
+            backgroundTintList = inputTint()
+            setSelection(groups.indexOfFirst { it.id == selectedId }.coerceAtLeast(0))
+            tag = groups
         }
     }
 
     private fun editCustomMetric(existing: CustomMetricDefinition?, template: CustomMetricDefinition? = null) {
-        val source = existing ?: template
-        val name = styledInput("custom_metric.name").apply {
-            setText(source?.name?.removePrefix("Example · ").orEmpty())
+        val source=existing?:template
+        val name=styledInput("custom_metric.name").apply{setText(source?.name?.removePrefix("Example · ").orEmpty())}
+        val group=groupSpinner(source?.groupId?:DEFAULT_SCRIPT_GROUP_ID)
+        val script=JavaScriptCodeEditor(this).apply{
+            hint="custom_metric.javascript"
+            setText(source?.script?:"const rows = JSON.parse(jsonFile.content);\nreturn rows.length;")
         }
-        val script = JavaScriptCodeEditor(this).apply {
-            hint = "custom_metric.javascript"
-            setText(source?.script ?: "const rows = JSON.parse(jsonFile.content);\nreturn rows.length;")
+        var enabled=source?.enabled?:true
+        val enabledButton=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;text=if(enabled)"Enabled" else "Disabled"}}
+        val body=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0)
+            addView(infoText("Available: jsonFile, d3, Plot, aq, theme, helpers, context.inputs, and ENV. Return a scalar/object, or {label,value,inputs:[{name,label,placeholder,default,env:'ENV.x.path'}]} to render persistent inputs.").apply{setTextColor(MUTED)},spacedMatchWidth(5))
+            addView(name,spacedMatchWidth(5));addView(group,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(350)));addView(enabledButton,spacedMatchWidth(5))
         }
-        val body = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), 0, dp(14), 0)
-            addView(infoText("Available modules: d3, Plot, aq, theme, helpers, context, and jsonFile { name, content }. Parse the effective JSON with JSON.parse(jsonFile.content). Scripts return synchronously.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
-            addView(name, spacedMatchWidth(6))
-            addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(330)))
-        }
-        val title = when {
-            existing != null -> "Edit custom metric"
-            template != null -> "Use example metric"
-            else -> "New custom metric"
-        }
-        val dialog = AlertDialog.Builder(this).setTitle(title)
-            .setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val n = name.text.toString().trim(); val code = script.text.toString().trim()
-                if (n.isBlank()) { name.error = "Name is required"; return@setOnClickListener }
-                if (code.isBlank()) { script.error = "JavaScript is required"; return@setOnClickListener }
-                val next = CustomMetricDefinition(existing?.id ?: UUID.randomUUID().toString(), n, code, existing?.enabled ?: true)
-                customMetricsDraft = if (existing == null) (customMetricsDraft + next).toMutableList()
-                    else customMetricsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
-                persistCustomMetrics("Custom metric auto-saved.")
-                renderCustomMetricSettings(); dialog.dismiss()
-            }
-        }
+        val dialog=AlertDialog.Builder(this).setTitle(if(existing!=null)"Edit custom metric" else "New custom metric").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create()
+        dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+            val n=name.text.toString().trim();val code=script.text.toString().trim();if(n.isBlank()){name.error="Name is required";return@setOnClickListener};if(code.isBlank()){script.error="JavaScript is required";return@setOnClickListener}
+            @Suppress("UNCHECKED_CAST") val groups=group.tag as List<ScriptGroupDefinition>; val gid=groups.getOrNull(group.selectedItemPosition)?.id?:DEFAULT_SCRIPT_GROUP_ID
+            val next=CustomMetricDefinition(existing?.id?:UUID.randomUUID().toString(),n,code,enabled,gid)
+            customMetricsDraft=if(existing==null)(customMetricsDraft+next).toMutableList() else customMetricsDraft.map{if(it.id==existing.id)next else it}.toMutableList()
+            persistCustomMetrics("Custom metric auto-saved.");renderCustomStatSettings();dialog.dismiss()
+        }}
         showDialog(dialog)
-    }
-
-    private fun renderCustomPlotSettings() {
-        if (!::customPlotList.isInitialized) return
-        customPlotList.removeAllViews()
-        customPlotList.addView(accordion("Built-in plot examples", initiallyOpen = false) { examples ->
-            examples.addView(infoText("Six templates use Observable Plot and four use D3.js directly. Arquero is available in every script.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
-            BuiltinExamples.customPlots.forEach { example ->
-                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(1), 0, dp(1)) }
-                row.addView(infoText("${example.name}\n${example.engine}").apply { setTextColor(WHITE); textSize = 12f }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(TextView(this).apply {
-                    text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this)
-                    setOnClickListener { editCustomPlot(null, example) }
-                }, LinearLayout.LayoutParams(dp(52), dp(30)))
-                examples.addView(row, matchWidth())
-            }
-        }, spacedMatchWidth(5))
-
-        customPlotList.addView(infoText("Your custom plots").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(3))
-        if (customPlotsDraft.isEmpty()) {
-            customPlotList.addView(infoText("No custom plots configured.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
-            return
-        }
-        customPlotsDraft.forEach { plot ->
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(2), 0, dp(2)) }
-            row.addView(infoText("${plot.name}\n${plot.engine}").apply {
-                setTextColor(if (plot.enabled) WHITE else MUTED); textSize = 12f
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            row.addView(TextView(this).apply {
-                text = if (plot.enabled) "ON" else "OFF"; setTextColor(if (plot.enabled) GREEN else MUTED); gravity = Gravity.CENTER; AppFonts.apply(this, bold = true)
-                setOnClickListener {
-                    customPlotsDraft = customPlotsDraft.map { if (it.id == plot.id) it.copy(enabled = !it.enabled) else it }.toMutableList()
-                    persistCustomPlots("Custom plot updated.")
-                    renderCustomPlotSettings()
-                }
-            }, LinearLayout.LayoutParams(dp(44), dp(30)))
-            row.addView(TextView(this).apply { text = "Edit"; setTextColor(PRIMARY); gravity = Gravity.CENTER; AppFonts.apply(this); setOnClickListener { editCustomPlot(plot) } }, LinearLayout.LayoutParams(dp(50), dp(30)))
-            row.addView(TextView(this).apply {
-                text = "×"; setTextColor(RED); gravity = Gravity.CENTER; AppFonts.apply(this, bold = true)
-                setOnClickListener { customPlotsDraft.removeAll { it.id == plot.id }; persistCustomPlots("Custom plot removed."); renderCustomPlotSettings() }
-            }, LinearLayout.LayoutParams(dp(34), dp(30)))
-            customPlotList.addView(row, matchWidth())
-        }
     }
 
     private fun editCustomPlot(existing: CustomPlotDefinition?, template: CustomPlotDefinition? = null) {
-        val source = existing ?: template
-        val name = styledInput("custom_plot.name").apply { setText(source?.name?.removePrefix("Example · ").orEmpty()) }
-        val engineNames = listOf("Auto", "Observable Plot", "D3.js")
-        val engineValues = listOf("auto", "observable", "d3")
-        val engine = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, engineNames)
-            backgroundTintList = inputTint()
-            setSelection(engineValues.indexOf(source?.engine ?: "auto").coerceAtLeast(0))
-        }
-        val script = JavaScriptCodeEditor(this).apply {
-            hint = "custom_plot.javascript"
-            setText(source?.script ?: """const rows = helpers.rows(jsonFile);
-const moneyKey = helpers.inferKey(rows, ['price', 'amount', 'cost', 'expense', 'value', 'total', 'money']);
-const dateKey = helpers.inferKey(rows, ['date', 'datetime', 'timestamp', 'time', 'created_at']);
-if (!moneyKey) throw new Error('No numeric/money column detected');
-const points = rows.map((row, index) => ({
-  x: dateKey ? helpers.parseDate(row[dateKey]) : index,
-  y: helpers.number(row[moneyKey])
-})).filter(point => (point.x instanceof Date ? !Number.isNaN(+point.x) : Number.isFinite(point.x)) && Number.isFinite(point.y));
-return Plot.plot({
-  width: context.width,
-  height: context.height,
-  style: helpers.plotStyle(theme),
-  x: {grid: true},
-  y: {grid: true},
-  marks: [
-    Plot.lineY(points, {x: 'x', y: 'y', stroke: theme.accent}),
-    Plot.dot(points, {x: 'x', y: 'y', fill: theme.observation, tip: true})
-  ]
-});""")
-        }
-        var enabled = source?.enabled ?: true
-        val enabledButton = styledButton(if (enabled) "Enabled" else "Disabled").apply {
-            setOnClickListener { enabled = !enabled; text = if (enabled) "Enabled" else "Disabled"; setTextColor(if (enabled) GREEN else MUTED) }
-        }
-        val body = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), 0, dp(14), 0)
-            addView(infoText("Available: d3, Plot, aq, jsonFile, context.container, context.width/height, theme, and helpers. Return an SVG/HTMLElement or append directly to context.container. Scripts return synchronously.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
-            addView(name, spacedMatchWidth(5))
-            addView(engine, spacedMatchWidth(5))
-            addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(390)))
-            addView(enabledButton, spacedMatchWidth(5))
-        }
-        val title = when {
-            existing != null -> "Edit custom plot"
-            template != null -> "Use example plot"
-            else -> "New custom plot"
-        }
-        val dialog = AlertDialog.Builder(this).setTitle(title).setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val n = name.text.toString().trim(); val code = script.text.toString().trim()
-                if (n.isBlank()) { name.error = "Name is required"; return@setOnClickListener }
-                if (code.isBlank()) { script.error = "JavaScript is required"; return@setOnClickListener }
-                val next = CustomPlotDefinition(existing?.id ?: UUID.randomUUID().toString(), n, code, engineValues[engine.selectedItemPosition], enabled)
-                customPlotsDraft = if (existing == null) (customPlotsDraft + next).toMutableList()
-                    else customPlotsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
-                persistCustomPlots("Custom plot auto-saved.")
-                renderCustomPlotSettings(); dialog.dismiss()
-            }
-        }
+        val source=existing?:template
+        val name=styledInput("custom_plot.name").apply{setText(source?.name?.removePrefix("Example · ").orEmpty())}
+        val group=groupSpinner(source?.groupId?:DEFAULT_SCRIPT_GROUP_ID)
+        val engineNames=listOf("Auto","Observable Plot","D3.js");val engineValues=listOf("auto","observable","d3")
+        val engine=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,engineNames);backgroundTintList=inputTint();setSelection(engineValues.indexOf(source?.engine?:"auto").coerceAtLeast(0))}
+        val script=JavaScriptCodeEditor(this).apply{hint="custom_plot.javascript";setText(source?.script?:"const rows=helpers.rows(jsonFile); return Plot.plot({width:context.width,height:context.height,marks:[Plot.dot(rows,{x:(d,i)=>i,y:d=>helpers.number(d.PRICE),tip:true})]});")}
+        var enabled=source?.enabled?:true
+        val enabledButton=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;text=if(enabled)"Enabled" else "Disabled"}}
+        val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Available: d3, Plot, aq, jsonFile, context, theme, helpers, and ENV. Custom plots receive Exvia semantic zoom automatically when possible.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(name,spacedMatchWidth(5));addView(group,spacedMatchWidth(5));addView(engine,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(390)));addView(enabledButton,spacedMatchWidth(5))}
+        val dialog=AlertDialog.Builder(this).setTitle(if(existing!=null)"Edit custom plot" else "New custom plot").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create()
+        dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+            val n=name.text.toString().trim();val code=script.text.toString().trim();if(n.isBlank()){name.error="Name is required";return@setOnClickListener};if(code.isBlank()){script.error="JavaScript is required";return@setOnClickListener}
+            @Suppress("UNCHECKED_CAST") val groups=group.tag as List<ScriptGroupDefinition>;val gid=groups.getOrNull(group.selectedItemPosition)?.id?:DEFAULT_SCRIPT_GROUP_ID
+            val next=CustomPlotDefinition(existing?.id?:UUID.randomUUID().toString(),n,code,engineValues[engine.selectedItemPosition],enabled,gid)
+            customPlotsDraft=if(existing==null)(customPlotsDraft+next).toMutableList() else customPlotsDraft.map{if(it.id==existing.id)next else it}.toMutableList()
+            persistCustomPlots("Custom plot auto-saved.");renderCustomStatSettings();dialog.dismiss()
+        }}
         showDialog(dialog)
     }
+
+    private fun showScriptGroupManager() {
+        val list=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),0,dp(12),0)}
+        lateinit var dialog:AlertDialog
+        fun rebuild(){
+            list.removeAllViews(); list.addView(styledButton("+ New accordion").apply{setOnClickListener{promptEditScriptGroup(null){dialog.dismiss();showScriptGroupManager()}}},spacedMatchWidth(5))
+            normalizedScriptGroups().forEach{group->
+                val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
+                row.addView(infoText(group.name).apply{setTextColor(if(group.id==DEFAULT_SCRIPT_GROUP_ID)MUTED else WHITE);setOnClickListener{if(group.id!=DEFAULT_SCRIPT_GROUP_ID)promptEditScriptGroup(group){dialog.dismiss();showScriptGroupManager()}}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f))
+                if(group.id!=DEFAULT_SCRIPT_GROUP_ID) row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);setOnClickListener{
+                    customMetricsDraft=customMetricsDraft.map{if(it.groupId==group.id)it.copy(groupId=DEFAULT_SCRIPT_GROUP_ID)else it}.toMutableList();customPlotsDraft=customPlotsDraft.map{if(it.groupId==group.id)it.copy(groupId=DEFAULT_SCRIPT_GROUP_ID)else it}.toMutableList();scriptGroupsDraft.removeAll{it.id==group.id};persistScriptGroups("Accordion removed; scripts moved to Default.");persistCustomMetrics("Metrics regrouped.");persistCustomPlots("Plots regrouped.");dialog.dismiss();showScriptGroupManager()
+                }},LinearLayout.LayoutParams(dp(40),dp(32)))
+                list.addView(row,matchWidth())
+            }
+        }
+        dialog=AlertDialog.Builder(this).setTitle("Custom Accordions").setView(ScrollView(this).apply{addView(list,matchWidth())}).setNegativeButton("Close",null).create();rebuild();showDialog(dialog)
+    }
+
+    private fun promptEditScriptGroup(existing: ScriptGroupDefinition?, done:()->Unit) {
+        val input=styledInput("accordion.name · use :: for nesting").apply{setText(existing?.name.orEmpty())}
+        val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Use :: to create nested Stat accordions, for example Stat+::Finance. Without :: the accordion is a top-level Stat sibling.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(input,matchWidth())}
+        val dialog=AlertDialog.Builder(this).setTitle(if(existing==null)"New Custom Accordion" else "Rename Custom Accordion").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create()
+        dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+            val raw=input.text.toString().trim(); val parts=raw.split("::").map{it.trim()}
+            if(parts.isEmpty()||parts.any{it.isBlank()}){input.error="Each :: path segment needs a name";return@setOnClickListener}
+            val name=parts.joinToString("::")
+            if(normalizedScriptGroups().any{it.id!=existing?.id&&it.name.equals(name,true)}){input.error="Name already exists";return@setOnClickListener}
+            val next=ScriptGroupDefinition(existing?.id?:UUID.randomUUID().toString(),name)
+            scriptGroupsDraft=if(existing==null)(scriptGroupsDraft+next).toMutableList() else scriptGroupsDraft.map{if(it.id==existing.id)next else it}.toMutableList()
+            persistScriptGroups("Custom Accordion saved.");dialog.dismiss();done()
+        }}
+        showDialog(dialog)
+    }
+
+
+    private fun persistEnvironmentSnapshot(snapshot: JSONObject) {
+        val encoded = snapshot.toString()
+        if (encoded == lastEnvironmentSnapshot) return
+        lastEnvironmentSnapshot = encoded
+        val nextEnvironment = environmentVariablesDraft.map { definition ->
+            if (!snapshot.has(definition.name)) definition else definition.copy(valueJson = jsonLiteral(snapshot.opt(definition.name)))
+        }.toMutableList()
+        val snapshotKeys = snapshot.keys()
+        while (snapshotKeys.hasNext()) {
+            val name = snapshotKeys.next()
+            if (nextEnvironment.none { it.name.equals(name, true) }) {
+                nextEnvironment += EnvironmentVariableDefinition(
+                    id = UUID.randomUUID().toString(), name = name,
+                    initializerScript = "return null;", valueJson = jsonLiteral(snapshot.opt(name)), enabled = true,
+                )
+            }
+        }
+        environmentVariablesDraft = nextEnvironment
+        settings = settings.copy(environmentVariables = environmentVariablesDraft.toList())
+        mainViewModel.updateStyleSettings(settings.copy(colorMappings = colorMappingsDraft.map(::resolveRuleEnv)))
+        if (filterEnabled) applyFilterAndRender(false)
+        if (flagEnabled) applyFlagAndRender(false)
+        environmentSaveRunnable?.let(uiHandler::removeCallbacks)
+        val save = Runnable { settingsViewModel.saveEnvironmentVariables(settings) }
+        environmentSaveRunnable = save
+        uiHandler.postDelayed(save, 700L)
+    }
+
+    private fun jsonLiteral(value: Any?): String = when (value) {
+        null, JSONObject.NULL -> "null"
+        is JSONObject, is JSONArray -> value.toString()
+        is Number, is Boolean -> value.toString()
+        else -> JSONObject.quote(value.toString())
+    }
+
+    private fun persistEnvironmentVariables(message: String) {
+        settings = settings.copy(environmentVariables = environmentVariablesDraft.toList())
+        settingsViewModel.saveEnvironmentVariables(settings)
+        statusText.text = message
+    }
+
+    private fun showEnvironmentManager() {
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, dp(12), 0) }
+        lateinit var dialog: AlertDialog
+        fun rebuild() {
+            root.removeAllViews()
+            root.addView(infoText("ENV is Exvia's persistent JavaScript variable store, not Android/OS environment variables. Scripts can call ENV.name.get(), post(), put(), and delete().").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            root.addView(accordion("Built-in ENV examples", initiallyOpen = false) { box ->
+                BuiltinExamples.environmentVariables.forEach { example ->
+                    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                    row.addView(infoText(example.name), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editEnvironmentVariable(null, example) { dialog.dismiss(); showEnvironmentManager() } } }, LinearLayout.LayoutParams(dp(52), dp(30)))
+                    box.addView(row, matchWidth())
+                }
+            }, matchWidth())
+            root.addView(styledButton("+ Add ENV variable").apply { setOnClickListener { editEnvironmentVariable(null, null) { dialog.dismiss(); showEnvironmentManager() } } }, spacedMatchWidth(5))
+            environmentVariablesDraft.forEach { item ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                row.addView(infoText("ENV.${item.name}").apply { setOnClickListener { editEnvironmentVariable(item, null) { dialog.dismiss(); showEnvironmentManager() } } }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); setOnClickListener { environmentVariablesDraft.removeAll { it.id == item.id }; persistEnvironmentVariables("ENV variable removed."); rebuild() } }, LinearLayout.LayoutParams(dp(40), dp(32)))
+                root.addView(row, matchWidth())
+            }
+        }
+        dialog = AlertDialog.Builder(this).setTitle("Variables / ENV").setView(ScrollView(this).apply { addView(root, matchWidth()) }).setNegativeButton("Close", null).create()
+        rebuild(); showDialog(dialog)
+    }
+
+    private fun editEnvironmentVariable(existing: EnvironmentVariableDefinition?, template: EnvironmentVariableDefinition?, done: () -> Unit) {
+        val source = existing ?: template
+        val name = styledInput("env.name").apply { setText(source?.name.orEmpty()) }
+        val script = JavaScriptCodeEditor(this).apply { hint = "env.initializer.js"; setText(source?.initializerScript ?: "return null;") }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0)
+            addView(infoText("Initializer is JavaScript. Example usage elsewhere: ENV.budget.get('daily'), ENV.budget.put('daily', 60), ENV.budget.post({monthly:1800}), ENV.budget.delete('daily'). Runtime changes persist automatically.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(name, spacedMatchWidth(5)); addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(260)))
+        }
+        val dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New ENV variable" else "Edit ENV variable").setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+        dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val n = name.text.toString().trim(); if (n.isBlank() || !n.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) { name.error = "Use a JavaScript identifier"; return@setOnClickListener }
+            if (environmentVariablesDraft.any { it.id != existing?.id && it.name.equals(n, true) }) { name.error = "ENV name already exists"; return@setOnClickListener }
+            val next = EnvironmentVariableDefinition(existing?.id ?: UUID.randomUUID().toString(), n, script.text.toString().trim().ifBlank { "return null;" }, existing?.valueJson ?: template?.valueJson ?: "null", true)
+            environmentVariablesDraft = if (existing == null) (environmentVariablesDraft + next).toMutableList() else environmentVariablesDraft.map { if (it.id == existing.id) next else it }.toMutableList()
+            persistEnvironmentVariables("ENV variable auto-saved."); dialog.dismiss(); done()
+        } }
+        showDialog(dialog)
+    }
+
+    private fun persistNotificationRules(message: String) {
+        settings = settings.copy(notificationRules = notificationRulesDraft.toList())
+        settingsViewModel.saveNotificationRules(settings); statusText.text = message
+    }
+
+    private fun showNotificationManager() {
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, dp(12), 0) }
+        lateinit var dialog: AlertDialog
+        fun rebuild() {
+            root.removeAllViews()
+            root.addView(accordion("Built-in notification examples", initiallyOpen = false) { box ->
+                BuiltinExamples.notificationRules.forEach { example ->
+                    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                    row.addView(infoText(example.name), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { editNotificationRule(null, example) { dialog.dismiss(); showNotificationManager() } } }, LinearLayout.LayoutParams(dp(52), dp(30)))
+                    box.addView(row, matchWidth())
+                }
+            }, matchWidth())
+            root.addView(styledButton("+ Add notification rule").apply { setOnClickListener { editNotificationRule(null, null) { dialog.dismiss(); showNotificationManager() } } }, spacedMatchWidth(5))
+            notificationRulesDraft.forEach { rule ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                row.addView(infoText("${rule.name} · ${rule.eventName}").apply { setTextColor(if (rule.enabled) WHITE else MUTED); setOnClickListener { editNotificationRule(rule, null) { dialog.dismiss(); showNotificationManager() } } }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); setOnClickListener { notificationRulesDraft.removeAll { it.id == rule.id }; persistNotificationRules("Notification rule removed."); rebuild() } }, LinearLayout.LayoutParams(dp(40), dp(32)))
+                root.addView(row, matchWidth())
+            }
+        }
+        dialog = AlertDialog.Builder(this).setTitle("Notifications").setView(ScrollView(this).apply { addView(root, matchWidth()) }).setNegativeButton("Close", null).create(); rebuild(); showDialog(dialog)
+    }
+
+    private fun editNotificationRule(existing: NotificationRule?, template: NotificationRule?, done: () -> Unit) {
+        val source = existing ?: template
+        val events = listOf("event.amend", "event.resync", "event.save")
+        val name = styledInput("notification.name").apply { setText(source?.name?.removePrefix("Example · ").orEmpty()) }
+        val event = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, events); backgroundTintList = inputTint(); setSelection(events.indexOf(source?.eventName ?: "event.amend").coerceAtLeast(0)) }
+        val script = JavaScriptCodeEditor(this).apply { hint = "notification.javascript"; setText(source?.script ?: "return {notify:true,title:'Exvia',body:String(event.name)};") }
+        var enabled = source?.enabled ?: true
+        val enabledButton = styledButton(if (enabled) "Enabled" else "Disabled").apply { setOnClickListener { enabled = !enabled; text = if (enabled) "Enabled" else "Disabled" } }
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0); addView(infoText("Available: event, metric(name), jsonFile, ENV, d3, Plot, aq, theme and helpers. Return {notify,title,body,severity:'red|normal',IS_TOAST:true|false}. IS_TOAST shows an in-app Android Toast; notify controls the system notification.").apply { setTextColor(MUTED) }, spacedMatchWidth(5)); addView(name, spacedMatchWidth(5)); addView(event, spacedMatchWidth(5)); addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))); addView(enabledButton, spacedMatchWidth(5)) }
+        val dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New notification rule" else "Edit notification rule").setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+        dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { val n = name.text.toString().trim(); if (n.isBlank()) { name.error = "Name required"; return@setOnClickListener }; val next = NotificationRule(existing?.id ?: UUID.randomUUID().toString(), n, events[event.selectedItemPosition], script.text.toString(), enabled); notificationRulesDraft = if (existing == null) (notificationRulesDraft + next).toMutableList() else notificationRulesDraft.map { if (it.id == existing.id) next else it }.toMutableList(); persistNotificationRules("Notification rule auto-saved."); dialog.dismiss(); done() } }
+        showDialog(dialog)
+    }
+
+    private fun persistSchemaRules(message: String) { settings = settings.copy(schemaRules = schemaRulesDraft.toList()); settingsViewModel.saveSchemaRules(settings); schemaConfigSignature = ""; statusText.text = message; scheduleSchemaEvaluation(currentData) }
+    private fun showSchemaRuleManager() {
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12),0,dp(12),0) }; lateinit var dialog: AlertDialog
+        fun rebuild(){ root.removeAllViews(); root.addView(accordion("Built-in schema examples", initiallyOpen=false){ box -> BuiltinExamples.schemaRules.forEach { e -> val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(e.name),LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="Use";gravity=Gravity.CENTER;setTextColor(PRIMARY);AppFonts.apply(this);setOnClickListener{editSchemaRule(null,e){dialog.dismiss();showSchemaRuleManager()}}},LinearLayout.LayoutParams(dp(52),dp(30)));box.addView(row,matchWidth()) }},matchWidth());root.addView(styledButton("+ Add schema rule").apply{setOnClickListener{editSchemaRule(null,null){dialog.dismiss();showSchemaRuleManager()}}},spacedMatchWidth(5));schemaRulesDraft.forEach{r->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(r.name).apply{setTextColor(if(r.enabled)WHITE else MUTED);setOnClickListener{editSchemaRule(r,null){dialog.dismiss();showSchemaRuleManager()}}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);setOnClickListener{schemaRulesDraft.removeAll{it.id==r.id};persistSchemaRules("Schema rule removed.");rebuild()}},LinearLayout.LayoutParams(dp(40),dp(32)));root.addView(row,matchWidth())}}
+        dialog=AlertDialog.Builder(this).setTitle("Key schema scripts").setView(ScrollView(this).apply{addView(root,matchWidth())}).setNegativeButton("Close",null).create();rebuild();showDialog(dialog)
+    }
+    private fun editSchemaRule(existing:SchemaRuleDefinition?,template:SchemaRuleDefinition?,done:()->Unit){val source=existing?:template;val name=styledInput("schema_rule.name").apply{setText(source?.name.orEmpty())};val script=JavaScriptCodeEditor(this).apply{setText(source?.script?:"return {};")};var enabled=source?.enabled?:true;val toggle=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;text=if(enabled)"Enabled" else "Disabled"}};val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Per key, return any of DEFAULT_VALUE, HIDDEN, NUMBER_ONLY_KEYPAD, PLACEHOLDER, AUTO_COMPLETION, AUTO_COMPLETION_PARSING, BOOLEAN_01. Available: key, rows, ENV, context.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(name,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(300)));addView(toggle,spacedMatchWidth(5))};val dialog=AlertDialog.Builder(this).setTitle(if(existing==null)"New schema rule" else "Edit schema rule").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val n=name.text.toString().trim();if(n.isBlank()){name.error="Name required";return@setOnClickListener};val next=SchemaRuleDefinition(existing?.id?:UUID.randomUUID().toString(),n,script.text.toString(),enabled);schemaRulesDraft=if(existing==null)(schemaRulesDraft+next).toMutableList() else schemaRulesDraft.map{if(it.id==existing.id)next else it}.toMutableList();persistSchemaRules("Schema rule auto-saved.");dialog.dismiss();done()}};showDialog(dialog)}
+
+    private fun persistMetricColorMappings(message:String){settings=settings.copy(metricColorMappings=metricColorMappingsDraft.toList());settingsViewModel.saveMetricColorMappings(settings);metricColorSignature="";statusText.text=message;renderStats(mainViewModel.state.value.visibleData)}
+    private fun showMetricColorManager(){val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),0,dp(12),0)};lateinit var dialog:AlertDialog;fun rebuild(){root.removeAllViews();root.addView(accordion("Built-in metric color examples",initiallyOpen=false){box->BuiltinExamples.metricColorRules.forEach{e->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(e.name),LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="Use";gravity=Gravity.CENTER;setTextColor(PRIMARY);AppFonts.apply(this);setOnClickListener{editMetricColorRule(null,e){dialog.dismiss();showMetricColorManager()}}},LinearLayout.LayoutParams(dp(52),dp(30)));box.addView(row,matchWidth())}},matchWidth());root.addView(styledButton("+ Add metric color rule").apply{setOnClickListener{editMetricColorRule(null,null){dialog.dismiss();showMetricColorManager()}}},spacedMatchWidth(5));metricColorMappingsDraft.forEach{r->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText("${r.name} · ${r.metricName}").apply{setOnClickListener{editMetricColorRule(r,null){dialog.dismiss();showMetricColorManager()}}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);setOnClickListener{metricColorMappingsDraft.removeAll{it.id==r.id};persistMetricColorMappings("Metric color rule removed.");rebuild()}},LinearLayout.LayoutParams(dp(40),dp(32)));root.addView(row,matchWidth())}};dialog=AlertDialog.Builder(this).setTitle("Metric Color Mapping").setView(ScrollView(this).apply{addView(root,matchWidth())}).setNegativeButton("Close",null).create();rebuild();showDialog(dialog)}
+    private fun editMetricColorRule(existing:MetricColorRule?,template:MetricColorRule?,done:()->Unit){val source=existing?:template;val name=styledInput("metric_color.name").apply{setText(source?.name.orEmpty())};val metric=styledInput("metric.name or *").apply{setText(source?.metricName?:"*")};val script=JavaScriptCodeEditor(this).apply{setText(source?.script?:"const n=Number(metric.value); return {key:n<0?theme.negative:theme.positive,value:n<0?theme.negative:theme.positive};")};var enabled=source?.enabled?:true;val toggle=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;text=if(enabled)"Enabled" else "Disabled"}};val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Return {key:'#RRGGBB', value:'#RRGGBB'}. metric.name/value are exposed; metrics('Mean − Median gap') can read another rendered metric. ENV and theme are also available.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(name,spacedMatchWidth(5));addView(metric,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(260)));addView(toggle,spacedMatchWidth(5))};val dialog=AlertDialog.Builder(this).setTitle(if(existing==null)"New metric color rule" else "Edit metric color rule").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val n=name.text.toString().trim();val m=metric.text.toString().trim();if(n.isBlank()||m.isBlank()){name.error="Name and metric are required";return@setOnClickListener};val next=MetricColorRule(existing?.id?:UUID.randomUUID().toString(),n,m,script.text.toString(),enabled);metricColorMappingsDraft=if(existing==null)(metricColorMappingsDraft+next).toMutableList() else metricColorMappingsDraft.map{if(it.id==existing.id)next else it}.toMutableList();persistMetricColorMappings("Metric color rule auto-saved.");dialog.dismiss();done()}};showDialog(dialog)}
+
+    private fun persistCustomMetricInputs() { settings=settings.copy(customMetricInputs=customMetricInputsDraft.toMap()); settingsViewModel.saveCustomMetricInputs(settings) }
+
+    private fun scheduleSchemaEvaluation(data:TableData){
+        val active=schemaRulesDraft.filter{it.enabled}; if(active.isEmpty()||data.keys.isEmpty()){if(schemaConfigCache.isNotEmpty()){schemaConfigCache=emptyMap();renderDynamicForm(data)};return}
+        val signature=data.keys.joinToString("|")+":"+active.joinToString("|"){it.id+it.script.hashCode()};if(signature==schemaConfigSignature)return;schemaConfigSignature=signature
+        fieldSchemaEngine.evaluate(active,data){result->runOnUiThread{result.onSuccess{configs->val preserved=formInputs.mapValues{it.value.text.toString()};schemaConfigCache=configs;renderDynamicForm(data,preserved)}}}
+    }
+
+    private fun applySchemaOutputTransforms(values:Map<String,String>):LinkedHashMap<String,String> = linkedMapOf<String,String>().apply { values.forEach { (key,value) -> val config=schemaConfigCache.entries.firstOrNull{it.key.equals(key,true)}?.value; put(key, if(config?.boolean01==true) when(value.trim()){ "1"->"true";"0"->"false";else->value } else value) } }
+
+    private fun triggerAutomationEvent(name:String,payload:Map<String,String>){
+        val rules=notificationRulesDraft.filter{it.enabled&&it.eventName==name};if(rules.isEmpty())return
+        val data=mainViewModel.state.value.visibleData;val json=effectiveJsonFile(data);val metrics=notificationMetricMap(data)
+        val event=JSONObject().apply{put("name",name);payload.forEach{(k,v)->put(k,v)}}
+        rules.forEach { rule ->
+            notificationScriptEngine.evaluate(rule, event, metrics, json) { result ->
+                runOnUiThread {
+                    result.onSuccess { n ->
+                        if (n.isToast) Toast.makeText(this, listOf(n.title, n.body).filter { it.isNotBlank() }.joinToString(": "), Toast.LENGTH_LONG).show()
+                        if (n.notify) notificationDispatcher.post(n.title, n.body, n.severity)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun notificationMetricMap(data:TableData):Map<String,Any?>{
+        val out=linkedMapOf<String,Any?>(); val money=data.moneyKey?:settings.detectMoneyKey(data.keys); if(money!=null){val stats=statisticsViewModel.keyStats(data.rows.map{it.values[money].orEmpty()});out["Mean"]=stats.mean;out["Median"]=stats.median;out["STDV"]=stats.stdv;out["Sum"]=stats.sum;out["Minimum"]=stats.minimum;out["Maximum"]=stats.maximum;out["Q1"]=stats.q1;out["Q3"]=stats.q3;out["IQR"]=stats.iqr;out["Skew"]=stats.skew;out["Kurtosis"]=stats.kurtosis}
+        statisticsViewModel.financeStats(data)?.let{f->out["Net Cash Flow"]=f.netCashFlow;out["Savings Rate"]=f.savingsRate;out["Expense Ratio"]=f.expenseRatio;out["Total Income"]=f.totalIncome;out["Total Expenses"]=f.totalExpenses}
+        return out
+    }
+
+    private fun persistScriptGroups(message:String){settings=settings.copy(scriptGroups=normalizedScriptGroups());settingsViewModel.saveScriptGroups(settings);statusText.text=message;renderCustomStatSettings()}
 
     private fun persistCustomMetrics(message: String) {
         settings = settings.copy(customMetrics = customMetricsDraft.toList())
@@ -1546,12 +1779,19 @@ return Plot.plot({
             financeColumns = settingsViewModel.parseColumnList(financeColumnsSetting.text.toString()),
             customMetrics = customMetricsDraft.toList(),
             customPlots = customPlotsDraft.toList(),
+            scriptGroups = scriptGroupsDraft.toList(),
+            environmentVariables = environmentVariablesDraft.toList(),
+            notificationRules = notificationRulesDraft.toList(),
+            schemaRules = schemaRulesDraft.toList(),
+            metricColorMappings = metricColorMappingsDraft.toList(),
+            customMetricInputs = customMetricInputsDraft.toMap(),
             fileScripts = fileScriptsDraft.toList(),
             imaginaryFields = imaginaryFieldsDraft.toList(),
             uiScale = uiScale!!,
             textScale = textScale!!,
             rowsPerPage = rowsPerPage!!,
             undoHistoryLimit = undoHistoryLimit!!,
+            automaticAmend = automaticAmendSpinner.selectedItemPosition == 0,
             themePreset = selectedTheme,
             palette = currentUiPalette(),
             plotTheme = currentPlotTheme(),
@@ -1685,8 +1925,178 @@ return Plot.plot({
         showDialog(dialog)
     }
 
+    private fun showGitPanel() {
+        if (requireToken() == null) return
+        gitHistoryPage = 1
+        val stageStatus = infoText(
+            if (hasStagedChanges) "Working tree: STAGED · ${selectedPath?.substringAfterLast('/') ?: "selected file"}"
+            else "Working tree: CLEAN · ${settings.branch}"
+        ).apply {
+            setTextColor(if (hasStagedChanges) PRIMARY else MUTED)
+            AppFonts.apply(this, bold = hasStagedChanges, textScale = settings.textScale)
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(4), dp(14), dp(4))
+            setBackgroundColor(BLACK)
+            addView(stageStatus, spacedMatchWidth(7))
+            addView(infoText("GitHub history uses the configured ${settings.branch} branch. Pull discards a local stage after confirmation; Amend commits and pushes the staged Table working copy.").apply {
+                setTextColor(MUTED)
+            }, spacedMatchWidth(8))
+        }
+
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        actions.addView(styledButton("Re-sync · Pull").apply {
+            setOnClickListener {
+                gitDialog?.dismiss()
+                refreshFilesAndTable()
+            }
+        }, LinearLayout.LayoutParams(0, dp(32), 1f).apply { marginEnd = dp(3) })
+        actions.addView(styledButton("Amend · Stage → Commit → Push").apply {
+            isEnabled = hasStagedChanges
+            alpha = if (hasStagedChanges) 1f else 0.38f
+            setOnClickListener {
+                if (hasStagedChanges) {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Amend staged changes?")
+                        .setMessage("Commit and push the selected file's local staged Table changes to ${settings.branch}?")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Amend") { _, _ ->
+                            gitDialog?.dismiss()
+                            mainViewModel.amendStaged(settings)
+                        }
+                        .create().also { showDialog(it) }
+                }
+            }
+        }, LinearLayout.LayoutParams(0, dp(32), 1f).apply { marginStart = dp(3) })
+        body.addView(actions, spacedMatchWidth(9))
+
+        body.addView(infoText("Commits").apply {
+            setTextColor(WHITE)
+            AppFonts.apply(this, bold = true, textScale = settings.textScale)
+        }, spacedMatchWidth(4))
+
+        gitCommitList = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(BLACK)
+        }
+        body.addView(ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(BLACK)
+            addView(gitCommitList, matchWidth())
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(360)))
+
+        val pager = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        gitPreviousButton = styledButton("Previous").apply {
+            setOnClickListener {
+                if (gitHistoryPage > 1 && !busy) mainViewModel.loadGitHistory(settings, gitHistoryPage - 1)
+            }
+        }
+        gitPageText = TextView(this).apply {
+            text = "Page 1"
+            gravity = Gravity.CENTER
+            setTextColor(WHITE)
+            AppFonts.apply(this, bold = true, textScale = settings.textScale)
+        }
+        gitNextButton = styledButton("Next").apply {
+            setOnClickListener { if (!busy) mainViewModel.loadGitHistory(settings, gitHistoryPage + 1) }
+        }
+        pager.addView(gitPreviousButton, LinearLayout.LayoutParams(0, dp(31), 1f).apply { marginEnd = dp(4) })
+        pager.addView(gitPageText, LinearLayout.LayoutParams(0, dp(31), 0.8f))
+        pager.addView(gitNextButton, LinearLayout.LayoutParams(0, dp(31), 1f).apply { marginStart = dp(4) })
+        body.addView(pager, spacedMatchWidth(5))
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Git · ${settings.owner}/${settings.repo}")
+            .setView(body)
+            .setNegativeButton("Close", null)
+            .create()
+        dialog.setOnDismissListener {
+            if (gitDialog === dialog) {
+                gitDialog = null
+                gitCommitList = null
+                gitPageText = null
+                gitPreviousButton = null
+                gitNextButton = null
+            }
+        }
+        gitDialog = dialog
+        showDialog(dialog)
+        mainViewModel.loadGitHistory(settings, 1)
+    }
+
+    private fun renderGitHistory(page: CommitPage) {
+        if (gitDialog?.isShowing != true) return
+        gitHistoryPage = page.page
+        gitPageText?.text = "Page ${page.page}"
+        gitPreviousButton?.isEnabled = page.hasPrevious
+        gitPreviousButton?.alpha = if (page.hasPrevious) 1f else 0.38f
+        gitNextButton?.isEnabled = page.hasNext
+        gitNextButton?.alpha = if (page.hasNext) 1f else 0.38f
+        val list = gitCommitList ?: return
+        list.removeAllViews()
+        if (page.commits.isEmpty()) {
+            list.addView(infoText("No commits found on this page.").apply { setTextColor(MUTED) }, spacedMatchWidth(8))
+            return
+        }
+        page.commits.forEachIndexed { index, commit ->
+            val isHead = page.page == 1 && index == 0
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(5), dp(6), dp(5), dp(7))
+                setBackgroundColor(BLACK)
+            }
+            row.addView(TextView(this).apply {
+                text = buildString {
+                    if (isHead) append("HEAD · ")
+                    append(commit.shortSha)
+                    append(" · ")
+                    append(commit.message.ifBlank { "(no commit message)" })
+                }
+                setTextColor(if (isHead) PRIMARY else WHITE)
+                AppFonts.apply(this, bold = true, textScale = settings.textScale)
+            }, matchWidth())
+            row.addView(TextView(this).apply {
+                text = "${commit.author} · ${commit.date.ifBlank { "unknown date" }}"
+                setTextColor(MUTED)
+                textSize = 11f
+                AppFonts.apply(this, textScale = settings.textScale)
+            }, matchWidth())
+            if (!isHead) {
+                row.addView(styledButton("Revert repository to ${commit.shortSha}", accent = SECONDARY).apply {
+                    setOnClickListener {
+                        val stagedWarning = if (hasAnyStagedChanges) "\n\nAll local staged Table changes in this repository will be discarded." else ""
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Revert to ${commit.shortSha}?")
+                            .setMessage("This creates a new commit whose repository tree matches ${commit.shortSha}; existing history is preserved.$stagedWarning")
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Revert") { _, _ ->
+                                gitDialog?.dismiss()
+                                mainViewModel.revertToCommit(settings, commit.sha)
+                            }
+                            .create().also { showDialog(it) }
+                    }
+                }, spacedMatchWidth(4))
+            }
+            list.addView(row, matchWidth())
+            if (index != page.commits.lastIndex) list.addView(View(this).apply { setBackgroundColor(SURFACE) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
+        }
+    }
+
     private fun refreshFilesAndTable() {
-        mainViewModel.synchronize(settings)
+        if (!hasAnyStagedChanges) {
+            mainViewModel.synchronize(settings, discardStaged = true)
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Pull from ${settings.branch}?")
+            .setMessage("There are local staged Table changes in this repository. Re-sync/Pull will discard all local stages and replace them with GitHub's ${settings.branch} branch.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Discard & Pull") { _, _ -> mainViewModel.synchronize(settings, discardStaged = true) }
+            .create().also { showDialog(it) }
     }
 
     private fun refreshSelected(successMessage: String? = null, forceNetwork: Boolean = false) {
@@ -1695,12 +2105,58 @@ return Plot.plot({
     }
 
     private fun applyFilterAndRender(showStatus: Boolean) {
-        mainViewModel.setFilter(filterEnabled, filterQuery, announce = showStatus)
+        mainViewModel.setFilter(filterEnabled, resolveEnvInQuery(filterQuery), announce = showStatus)
     }
 
     private fun applyFlagAndRender(showStatus: Boolean) {
-        mainViewModel.setFlag(flagEnabled, flagQuery, selectedFlagRule, announce = showStatus)
+        mainViewModel.setFlag(flagEnabled, resolveEnvInQuery(flagQuery), selectedFlagRule?.let(::resolveRuleEnv), announce = showStatus)
     }
+
+    private fun initializeEnvironmentRuntime() {
+        val payload = JSONObject().apply { put("rows", JSONArray()); put("tasks", JSONArray()) }
+        plotRuntime.evaluateFormulas(payload) { /* environment snapshot is consumed by PlotWebRuntime */ }
+    }
+
+    private fun resolveEnvInQuery(query: String): String {
+        val regex = Regex("""ENV\.([A-Za-z_][A-Za-z0-9_]*)\.get\((?:['"]([^'"]*)['"])?\)""")
+        return regex.replace(query) { match ->
+            val name = match.groupValues[1]
+            val path = match.groupValues.getOrNull(2).orEmpty()
+            val definition = environmentVariablesDraft.firstOrNull { it.name.equals(name, true) } ?: return@replace "NULL"
+            val root = runCatching { org.json.JSONTokener(definition.valueJson).nextValue() }.getOrNull()
+            var value: Any? = root
+            if (path.isNotBlank()) path.split('.').filter { it.isNotBlank() }.forEach { part ->
+                value = when (val current = value) {
+                    is JSONObject -> current.opt(part)
+                    is JSONArray -> part.toIntOrNull()?.let { current.opt(it) }
+                    else -> null
+                }
+            }
+            when (value) {
+                null, JSONObject.NULL -> "NULL"
+                is Number, is Boolean -> value.toString()
+                else -> "'${value.toString().replace("'", "''")}'"
+            }
+        }
+    }
+
+    private fun resolveEnvInScript(script: String): String {
+        val regex = Regex("""ENV\.([A-Za-z_][A-Za-z0-9_]*)\.get\((?:['"]([^'"]*)['"])?\)""")
+        return regex.replace(script) { match ->
+            val name = match.groupValues[1]; val path = match.groupValues.getOrNull(2).orEmpty()
+            val definition = environmentVariablesDraft.firstOrNull { it.name.equals(name, true) } ?: return@replace "null"
+            var value: Any? = runCatching { org.json.JSONTokener(definition.valueJson).nextValue() }.getOrNull()
+            if (path.isNotBlank()) path.split('.').filter { it.isNotBlank() }.forEach { part -> value = when (val c=value) { is JSONObject -> c.opt(part); is JSONArray -> part.toIntOrNull()?.let { c.opt(it) }; else -> null } }
+            jsonLiteral(value)
+        }
+    }
+
+    private fun resolveRuleEnv(rule: TableStyleRule): TableStyleRule = rule.copy(
+        query = resolveEnvInQuery(rule.query),
+        foregroundScript = resolveEnvInScript(rule.foregroundScript),
+        backgroundScript = resolveEnvInScript(rule.backgroundScript),
+        contentScript = resolveEnvInScript(rule.contentScript),
+    )
 
     private fun toggleQueryMode() {
         queryMode = if (queryMode == TableQueryMode.FILTERING) TableQueryMode.FLAGGING else TableQueryMode.FILTERING
@@ -1742,7 +2198,13 @@ return Plot.plot({
         }
         for (key in data.keys) {
             if (imaginaryKeys.any { it.equals(key, true) }) continue
-            val initial = preserved[key] ?: if (key == data.dateKey) currentDateTime() else ""
+            val config = schemaConfigCache.entries.firstOrNull { it.key.equals(key, true) }?.value
+            if (config?.hidden == true) continue
+            val initial = preserved[key] ?: when {
+                key == data.dateKey -> currentDateTime()
+                !config?.defaultValue.isNullOrBlank() -> config?.defaultValue.orEmpty()
+                else -> ""
+            }
             val input = inputForKey(key, initial, data)
             formInputs[key] = input
             dynamicForm.addView(formulaInputRow(key, input), spacedMatchWidth(4))
@@ -1750,37 +2212,29 @@ return Plot.plot({
     }
 
     private fun inputForKey(key: String, value: String, data: TableData): EditText {
-        val suggestions = suggestionsForKey(key, data)
-        return if (key == data.tagsKey) {
+        val config = schemaConfigCache.entries.firstOrNull { it.key.equals(key, true) }?.value
+        var suggestions = if (config?.autoCompletion == false) emptyList() else suggestionsForKey(key, data)
+        suggestions = when (config?.autoCompletionParsing?.lowercase()) {
+            "uppercase" -> suggestions.map { it.uppercase() }.distinct()
+            "lowercase" -> suggestions.map { it.lowercase() }.distinct()
+            else -> suggestions
+        }
+        val placeholder = config?.placeholder?.takeIf { it.isNotBlank() } ?: "$key (optional)"
+        val configuredInputType = if (config?.numberOnlyKeypad == true) {
+            InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+        } else InputType.TYPE_CLASS_TEXT
+        return if (key == data.tagsKey && config?.numberOnlyKeypad != true) {
             MultiAutoCompleteTextView(this).apply {
-                hint = "$key (optional)"
-                inputType = InputType.TYPE_CLASS_TEXT
-                isSingleLine = true
-                threshold = 1
-                setTokenizer(MultiAutoCompleteTextView.CommaTokenizer())
-                setTextColor(WHITE)
-                setHintTextColor(MUTED)
-                backgroundTintList = inputTint()
-                setPadding(dp(8), dp(5), dp(8), dp(5))
-                minHeight = dp(46)
-                AppFonts.apply(this)
-                setAdapter(suggestionAdapter(suggestions))
-                setText(value)
+                hint = placeholder; inputType = configuredInputType; isSingleLine = true; threshold = 1
+                setTokenizer(MultiAutoCompleteTextView.CommaTokenizer()); setTextColor(WHITE); setHintTextColor(MUTED)
+                backgroundTintList = inputTint(); setPadding(dp(8), dp(5), dp(8), dp(5)); minHeight = dp(46); AppFonts.apply(this)
+                if (config?.autoCompletion != false) setAdapter(suggestionAdapter(suggestions)); setText(value)
             }
         } else {
             AutoCompleteTextView(this).apply {
-                hint = "$key (optional)"
-                inputType = InputType.TYPE_CLASS_TEXT
-                isSingleLine = true
-                threshold = 1
-                setTextColor(WHITE)
-                setHintTextColor(MUTED)
-                backgroundTintList = inputTint()
-                setPadding(dp(8), dp(5), dp(8), dp(5))
-                minHeight = dp(46)
-                AppFonts.apply(this)
-                setAdapter(suggestionAdapter(suggestions))
-                setText(value)
+                hint = placeholder; inputType = configuredInputType; isSingleLine = true; threshold = 1
+                setTextColor(WHITE); setHintTextColor(MUTED); backgroundTintList = inputTint(); setPadding(dp(8), dp(5), dp(8), dp(5)); minHeight = dp(46); AppFonts.apply(this)
+                if (config?.autoCompletion != false) setAdapter(suggestionAdapter(suggestions)); setText(value)
             }
         }
     }
@@ -1820,7 +2274,7 @@ return Plot.plot({
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, dp(14), 0)
-            addView(infoText("JavaScript exposes row, table, field, index, jsonFile, d3, Plot, aq, theme, helpers and context. SQLite uses SELECT <column|literal> [WHERE ...] with the same WHERE syntax as Filtering." ).apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(infoText("JavaScript exposes row, table, field, index, jsonFile, d3, Plot, aq, theme, helpers, context and ENV. SQLite uses SELECT <column|literal> [WHERE ...] with the same WHERE syntax as Filtering." ).apply { setTextColor(MUTED) }, spacedMatchWidth(6))
             addView(spinner, spacedMatchWidth(5))
             addView(editor, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(250)))
         }
@@ -2124,6 +2578,14 @@ return Plot.plot({
         var dialog: AlertDialog? = null
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(4), dp(12), dp(4)); setBackgroundColor(BLACK) }
         list.addView(infoText("Color Mapping is always evaluated when the table loads. Rules use Filtering syntax, but they never hide rows.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+        list.addView(accordion("Built-in Color Mapping examples", initiallyOpen = false) { box ->
+            BuiltinExamples.colorMappingRules.forEach { example ->
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                row.addView(infoText(example.name), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(TextView(this).apply { text = "Use"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); setOnClickListener { dialog?.dismiss(); editTableStyleRule(null, mapping = true, template = example) } }, LinearLayout.LayoutParams(dp(52), dp(30)))
+                box.addView(row, matchWidth())
+            }
+        }, spacedMatchWidth(5))
         if (colorMappingsDraft.isEmpty()) list.addView(infoText("No mappings. Use Restore defaults or create one.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
         colorMappingsDraft.forEach { rule ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -2160,13 +2622,14 @@ return Plot.plot({
         showDialog(dialog!!)
     }
 
-    private fun editTableStyleRule(existing: TableStyleRule?, mapping: Boolean) {
-        val name = styledInput("rule.name").apply { setText(existing?.name.orEmpty()) }
-        val query = styledInput("rule.syntax · SELECT * WHERE …").apply { isSingleLine = false; minLines = 3; gravity = Gravity.TOP; setText(existing?.query ?: "SELECT * WHERE ") }
-        val fore = styledInput("COLOR / .fore assignment").apply { isSingleLine = false; minLines = 2; gravity = Gravity.TOP; setText(existing?.foregroundScript.orEmpty()) }
-        val back = styledInput("BACKGROUND_COLOR / .back assignment").apply { isSingleLine = false; minLines = 2; gravity = Gravity.TOP; setText(existing?.backgroundScript.orEmpty()) }
-        val content = styledInput("CONTENT / .content assignment").apply { isSingleLine = false; minLines = 2; gravity = Gravity.TOP; setText(existing?.contentScript.orEmpty()) }
-        val example = infoText("Targets: table['MATCHING_ROW'].back, table['MATCHING_ROW']['PRICE'].fore, or table['MATCHING_ROW']['DESCRIPTION'].content. Content supports ${'$'}{COLUMN} and ${'$'}value.").apply { setTextColor(MUTED) }
+    private fun editTableStyleRule(existing: TableStyleRule?, mapping: Boolean, template: TableStyleRule? = null) {
+        val source = existing ?: template
+        val name = styledInput("rule.name").apply { setText(source?.name.orEmpty()) }
+        val query = styledInput("rule.syntax · SELECT * WHERE …").apply { isSingleLine = false; minLines = 3; gravity = Gravity.TOP; setText(source?.query ?: "SELECT * WHERE ") }
+        val fore = styledInput("COLOR / .fore assignment").apply { isSingleLine = false; minLines = 2; gravity = Gravity.TOP; setText(source?.foregroundScript.orEmpty()) }
+        val back = styledInput("BACKGROUND_COLOR / .back assignment").apply { isSingleLine = false; minLines = 2; gravity = Gravity.TOP; setText(source?.backgroundScript.orEmpty()) }
+        val content = styledInput("CONTENT / .content assignment").apply { isSingleLine = false; minLines = 2; gravity = Gravity.TOP; setText(source?.contentScript.orEmpty()) }
+        val example = infoText("Compact target: table.PRICE.fore = \"#f54900\" or table.back = \"#ff000044\". Legacy table['MATCHING_ROW']['PRICE'].fore remains supported. Content supports ${'$'}{COLUMN} and ${'$'}value.").apply { setTextColor(MUTED) }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(3), dp(14), dp(3)); setBackgroundColor(BLACK)
             addView(example, spacedMatchWidth(6)); listOf(name, query, fore, back, content).forEach { addView(it, spacedMatchWidth(5)) }
@@ -2236,6 +2699,51 @@ return Plot.plot({
             }
         }
         showDialog(dialog)
+    }
+
+    private fun showFieldOperationsManager() {
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12),0,dp(12),0) }
+        list.addView(styledButton("+ Add field"), spacedMatchWidth(5))
+        val keys = coreTableData().keys
+        if (keys.isEmpty()) list.addView(infoText("No real fields in the current schema.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+        keys.forEach { key ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(infoText(key).apply { setTextColor(WHITE) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT,1f))
+            row.addView(TextView(this).apply { text="×"; gravity=Gravity.CENTER; setTextColor(RED); AppFonts.apply(this,bold=true); setOnClickListener { confirmRemoveFieldDirect(key) } }, LinearLayout.LayoutParams(dp(40),dp(32)))
+            list.addView(row, matchWidth())
+        }
+        val dialog=AlertDialog.Builder(this).setTitle("Fields").setView(ScrollView(this).apply{addView(list,matchWidth())}).setNegativeButton("Close",null).create()
+        // replace add action with captured dialog
+        (list.getChildAt(0) as? Button)?.setOnClickListener { dialog.dismiss(); promptAddField() }
+        showDialog(dialog)
+    }
+
+    private fun showImaginaryFieldOperationsManager() {
+        val list=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(12),0,dp(12),0) }
+        val dialog=AlertDialog.Builder(this).setTitle("Imaginary fields").setView(ScrollView(this).apply{addView(list,matchWidth())}).setNegativeButton("Close",null).create()
+        list.addView(styledButton("+ Add imaginary field").apply { setOnClickListener { dialog.dismiss(); promptAddImaginaryField() } }, spacedMatchWidth(5))
+        if(imaginaryFieldsDraft.isEmpty()) list.addView(infoText("No imaginary fields configured.").apply{setTextColor(MUTED)},spacedMatchWidth(5))
+        imaginaryFieldsDraft.forEach { field ->
+            val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
+            row.addView(infoText(field.name).apply{setTextColor(PRIMARY);setOnClickListener{dialog.dismiss();promptAddImaginaryField(existing=field)}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f))
+            row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);setOnClickListener{dialog.dismiss();confirmRemoveImaginaryDirect(field)}},LinearLayout.LayoutParams(dp(40),dp(32)))
+            list.addView(row,matchWidth())
+        }
+        showDialog(dialog)
+    }
+
+    private fun confirmRemoveFieldDirect(key: String) {
+        val affectedRows=coreTableData().rows.count{row->row.values.keys.any{it.equals(key,true)}}
+        AlertDialog.Builder(this).setTitle("Remove $key?").setMessage(if(affectedRows==0) "Remove '$key' from the local form/schema?" else "Remove '$key' from $affectedRows row(s)? This modifies the selected JSON file.")
+            .setNegativeButton("No",null).setPositiveButton("Yes"){_,_->
+                if(affectedRows==0){ val preserved=collectFormValues().filterKeys{!it.equals(key,true)}.toMutableMap(); mainViewModel.replaceSchema(settings,coreTableData().keys.filterNot{it.equals(key,true)}); renderDynamicForm(mainViewModel.state.value.sourceData,preserved) }
+                else { if(requireToken()==null)return@setPositiveButton; mainViewModel.removeField(settings,key) }
+            }.create().also{showDialog(it)}
+    }
+
+    private fun confirmRemoveImaginaryDirect(field: ImaginaryFieldDefinition) {
+        AlertDialog.Builder(this).setTitle("Remove ${field.name}?").setMessage("This removes the imaginary definition and manual values. Core JSON is unchanged.")
+            .setNegativeButton("No",null).setPositiveButton("Yes"){_,_->imaginaryFieldsDraft.removeAll{it.id==field.id};persistImaginaryFields("Imaginary field '${field.name}' removed.")}.create().also{showDialog(it)}
     }
 
     private fun promptRemoveField() {
@@ -2457,14 +2965,19 @@ return Plot.plot({
                 result.fold(
                     onSuccess = { values ->
                         setBusy(false)
-                        val preview = values.entries.filter { it.value.isNotBlank() }.take(8)
+                        val transformedValues = applySchemaOutputTransforms(values)
+                        val preview = transformedValues.entries.filter { it.value.isNotBlank() }.take(8)
                             .joinToString("\n") { "${it.key}: ${it.value}" }
                             .ifBlank { "All fields are blank; the repository writer may only add an inferred date." }
                         AlertDialog.Builder(this)
-                            .setTitle("Amend expense?")
-                            .setMessage("$preview\n\nCommit this change to ${path.substringAfterLast('/')}?")
+                            .setTitle(if (settings.automaticAmend) "Amend expense?" else "Stage expense?")
+                            .setMessage(if (settings.automaticAmend) {
+                                "$preview\n\nCommit this change to ${path.substringAfterLast('/')}?"
+                            } else {
+                                "$preview\n\nSave this change to Exvia's local stage? It will not reach GitHub until Git → Amend is used."
+                            })
                             .setNegativeButton("No", null)
-                            .setPositiveButton("Yes") { _, _ -> mainViewModel.amend(settings, values) }
+                            .setPositiveButton("Yes") { _, _ -> mainViewModel.amend(settings, transformedValues) }
                             .create().also { showDialog(it) }
                     },
                     onFailure = { error ->
@@ -2666,7 +3179,7 @@ return Plot.plot({
             setPadding(dp(16), 0, dp(16), 0)
             setBackgroundColor(BLACK)
         }
-        currentData.keys.filterNot { key -> imaginaryKeys.any { it.equals(key, true) } }.forEach { key ->
+        currentData.keys.filterNot { key -> imaginaryKeys.any { it.equals(key, true) } }.filterNot { key -> schemaConfigCache.entries.firstOrNull { it.key.equals(key, true) }?.value?.hidden == true }.forEach { key ->
             val input = inputForKey(key, row.values[key].orEmpty(), currentData)
             editInputs[key] = input
             form.addView(formulaInputRow(key, input), matchWidth())
@@ -2699,7 +3212,7 @@ return Plot.plot({
                             onSuccess = { resolved ->
                                 saveImaginaryManualValues(row, imaginaryInputs)
                                 dialog.dismiss()
-                                mainViewModel.updateRow(settings, row, resolved)
+                                mainViewModel.updateRow(settings, row, applySchemaOutputTransforms(resolved))
                             },
                             onFailure = { error ->
                                 setBusy(false)
@@ -2729,9 +3242,14 @@ return Plot.plot({
     private fun confirmDeleteRow(row: DynamicRow) {
         if (selectedPath == null || requireToken() == null) return
         val preview = currentData.keys.take(4).joinToString("\n") { "$it: ${row.values[it].orEmpty()}" }
+        val deleteMessage = if (settings.automaticAmend) {
+            "$preview\n\nThis commits the deletion to ${settings.branch}."
+        } else {
+            "$preview\n\nThis stages the deletion locally. It will not reach GitHub until Git → Amend is used."
+        }
         AlertDialog.Builder(this)
             .setTitle("Delete row?")
-            .setMessage("$preview\n\nThis commits the deletion to ${settings.branch}.")
+            .setMessage(deleteMessage)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete") { _, _ -> mainViewModel.deleteRow(settings, row) }
             .create().also { showDialog(it) }
@@ -2739,6 +3257,7 @@ return Plot.plot({
 
     private fun renderStats(data: TableData) {
         statContent.removeAllViews()
+        scheduleMetricColorEvaluation(data)
         if (selectedPath == null) {
             statContent.addView(infoText("Select a JSON file first."), matchWidth())
             return
@@ -2797,11 +3316,8 @@ return Plot.plot({
                 addStatisticMetric(container, "Median", stats.median, STAT_MEDIAN)
                 addStatisticMetric(container, "Mean − Median gap", stats.meanMedianGap, if ((stats.meanMedianGap ?: 0.0) < 0.0) RED else GREEN)
                 val modeNumber = stats.mode?.let { statisticsViewModel.parseNumber(it) }
-                addMetric(container, "Mode", stats.mode ?: "N/A", nameColor = STAT_MEDIAN, valueColor = when {
-                    stats.mode == null -> MUTED
-                    modeNumber != null && modeNumber < 0.0 -> RED
-                    else -> STAT_MEDIAN
-                }, tooltip = statTooltip("Mode"))
+                val modeColor = when { stats.mode == null -> MUTED; modeNumber != null && modeNumber < 0.0 -> RED; else -> GREEN }
+                addMetric(container, "Mode", stats.mode ?: "N/A", nameColor = modeColor, valueColor = modeColor, tooltip = statTooltip("Mode"))
                 addStatisticMetric(container, "Sum", stats.sum, GREEN)
                 addStatisticMetric(container, "STDV", stats.stdv, STAT_SPREAD)
                 addStatisticMetric(container, "Minimum", stats.minimum, STAT_QUARTILE)
@@ -2813,55 +3329,184 @@ return Plot.plot({
                 addStatisticMetric(container, "IQR", stats.iqr, STAT_SPREAD)
                 addStatisticMetric(container, "Skew", stats.skew, STAT_SHAPE)
                 addStatisticMetric(container, "Kurtosis", stats.kurtosis, STAT_SHAPE)
-                addMetric(container, "n", stats.n.toString(), nameColor = MUTED, valueColor = WHITE, tooltip = statTooltip("n"))
-                addMetric(container, "n unique", stats.nUnique.toString(), nameColor = MUTED, valueColor = WHITE, tooltip = statTooltip("n unique"))
+                addMetric(container, "n", stats.n.toString(), nameColor = GREEN, valueColor = GREEN, tooltip = statTooltip("n"))
+                addMetric(container, "n unique", stats.nUnique.toString(), nameColor = GREEN, valueColor = GREEN, tooltip = statTooltip("n unique"))
                 addStatisticMetric(container, "Variance", stats.variance, STAT_SPREAD)
-                if (stats.numericN != stats.n) addMetric(container, "Numeric n", stats.numericN.toString(), nameColor = MUTED, valueColor = WHITE, tooltip = "Number of non-empty values that could be parsed as numbers.")
+                if (stats.numericN != stats.n) addMetric(container, "Numeric n", stats.numericN.toString(), nameColor = GREEN, valueColor = GREEN, tooltip = "Number of non-empty values that could be parsed as numbers.")
             }, matchWidth())
         }
 
-        val enabledCustomPlots = customPlotsDraft.filter { it.enabled }
-        if (enabledCustomPlots.isNotEmpty()) {
-            statContent.addView(accordion("Custom plots", tooltip = "JavaScript plots evaluated locally with D3.js, Observable Plot, and Arquero already initialized.") { customRoot ->
-                enabledCustomPlots.forEach { definition ->
-                    customRoot.addView(accordion(definition.name, tooltip = "${definition.engine} script using the current visible/filtered JSON file.") { plotRoot ->
-                        val payload = JSONObject().apply {
-                            put("kind", "custom")
-                            put("engine", definition.engine)
-                            put("script", definition.script)
-                            put("height", 340)
-                            put("theme", settings.plotTheme.toJson())
-                            put("jsonFile", effectiveJson)
-                        }
-                        val plot = WebPlotView(this@MainActivity).apply { bind(plotRuntime, payload) }
-                        plotRoot.addView(plot, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340)))
-                        plotRoot.addView(infoText("Runtime: ${definition.engine} · d3, Plot, aq, jsonFile, context, theme, and helpers are available. Filtering changes jsonFile.content.").apply { setTextColor(MUTED) }, matchWidth())
-                    }, matchWidth())
+        renderCustomStatGroups(effectiveJson)
+
+    }
+
+    /**
+     * Custom Stat accordions are top-level Stat siblings. `::` creates nested
+     * accordions (Anki-deck style), while Plotting always renders before Metrics.
+     */
+    private fun renderCustomStatGroups(effectiveJson: JSONObject) {
+        val enabledPlots = customPlotsDraft.filter { it.enabled }
+        val enabledMetrics = customMetricsDraft.filter { it.enabled }
+        if (enabledPlots.isEmpty() && enabledMetrics.isEmpty()) return
+
+        val roots = linkedMapOf<String, CustomStatNode>()
+        normalizedScriptGroups().forEach { group ->
+            val hasContent = enabledPlots.any { it.groupId == group.id } || enabledMetrics.any { it.groupId == group.id }
+            if (!hasContent) return@forEach
+            val parts = group.name.split("::").map { it.trim() }.filter { it.isNotEmpty() }
+                .ifEmpty { listOf("Default") }
+            var children = roots
+            var path = ""
+            var node: CustomStatNode? = null
+            parts.forEach { part ->
+                path = if (path.isBlank()) part else "$path::$part"
+                node = children.getOrPut(part.lowercase(Locale.US)) { CustomStatNode(part, path) }
+                children = node!!.children
+            }
+            node?.groupIds?.add(group.id)
+        }
+
+        fun renderNode(parent: LinearLayout, node: CustomStatNode, depth: Int) {
+            parent.addView(accordion(node.name, initiallyOpen = node.fullPath.equals("Default", true)) { box ->
+                val plots = enabledPlots.filter { it.groupId in node.groupIds }
+                val metrics = enabledMetrics.filter { it.groupId in node.groupIds }
+                if (plots.isNotEmpty()) {
+                    box.addView(infoText("# Plotting").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(3))
+                    plots.forEach { plot -> renderCustomPlotCard(box, plot, effectiveJson) }
                 }
+                if (metrics.isNotEmpty()) {
+                    box.addView(infoText("# Metrics").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(5))
+                    metrics.forEach { metric -> renderCustomMetricCard(box, metric, effectiveJson) }
+                }
+                node.children.values.forEach { child -> renderNode(box, child, depth + 1) }
             }, matchWidth())
         }
 
-        val enabledCustom = customMetricsDraft.filter { it.enabled }
-        if (enabledCustom.isNotEmpty()) {
-            statContent.addView(accordion("Custom", tooltip = "User-defined JavaScript metrics evaluated locally against the currently visible/filtered JSON rows through jsonFile.content.") { container ->
-                enabledCustom.forEach { metric ->
-                    val result = TextView(this).apply { text = "Evaluating…"; setTextColor(MUTED); gravity = Gravity.END; AppFonts.apply(this) }
-                    val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(3), 0, dp(3)) }
-                    val name = infoText(metric.name).apply { setTextColor(STAT_SHAPE); tooltipController.attachHold(this, { "Custom JavaScript metric evaluated from jsonFile.content. Edit it under Settings → Custom metric to inspect the script." }) }
-                    row.addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    row.addView(result, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    container.addView(row, matchWidth())
-                    customMetricEngine.evaluate(metric, effectiveJson) { evaluated ->
-                        runOnUiThread {
-                            evaluated.fold(
-                                onSuccess = { result.text = it; result.setTextColor(WHITE) },
-                                onFailure = { result.text = "Error: ${it.message ?: "evaluation failed"}"; result.setTextColor(RED) },
-                            )
-                        }
+        roots.values.forEach { root -> renderNode(statContent, root, 0) }
+    }
+
+    private fun renderCustomPlotCard(container: LinearLayout, definition: CustomPlotDefinition, effectiveJson: JSONObject) {
+        container.addView(accordion(definition.name, tooltip = "${definition.engine} script using the current visible/filtered JSON file.") { plotRoot ->
+            val payload = JSONObject().apply {
+                put("kind", "custom")
+                put("engine", definition.engine)
+                put("script", definition.script)
+                put("height", 340)
+                put("theme", settings.plotTheme.toJson())
+                put("jsonFile", effectiveJson)
+            }
+            val plot = WebPlotView(this@MainActivity).apply { bind(plotRuntime, payload) }
+            plotRoot.addView(plot, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340)))
+            plotRoot.addView(infoText("Runtime: ${definition.engine} · d3, Plot, aq, jsonFile, context, theme, helpers, and ENV. Filtering changes jsonFile.content.").apply { setTextColor(MUTED) }, matchWidth())
+        }, matchWidth())
+    }
+
+    private fun scheduleMetricColorEvaluation(data: TableData) {
+        val rules = metricColorMappingsDraft.filter { it.enabled }
+        if (rules.isEmpty()) { metricColorCache = emptyMap(); metricColorSignature = ""; return }
+        val items = mutableListOf<Pair<String, Double?>>()
+        val money = data.moneyKey ?: settings.detectMoneyKey(data.keys)
+        if (money != null) {
+            val st = statisticsViewModel.keyStats(data.rows.map { it.values[money].orEmpty() })
+            items += listOf("Mean" to st.mean, "Median" to st.median, "Mean − Median gap" to st.meanMedianGap, "Sum" to st.sum, "STDV" to st.stdv, "Minimum" to st.minimum, "Maximum" to st.maximum, "Range" to st.range, "Q1" to st.q1, "Q2" to st.q2, "Q3" to st.q3, "IQR" to st.iqr, "Skew" to st.skew, "Kurtosis" to st.kurtosis, "Variance" to st.variance)
+        }
+        statisticsViewModel.financeStats(data)?.let { f -> items += listOf("Net Cash Flow" to f.netCashFlow, "Savings Rate" to f.savingsRate, "Expense Ratio" to f.expenseRatio, "Total Income" to f.totalIncome, "Total Expenses" to f.totalExpenses, "Expense Growth Rate" to f.expenseGrowthRate, "Income growth rate" to f.incomeGrowthRate, "Cash Burn Rate" to f.cashBurnRate, "Average Daily Balance" to f.averageDailyBalance) }
+        val signature = rules.joinToString("|") { it.id + it.script.hashCode() } + ":" + items.hashCode()
+        if (signature == metricColorSignature) return
+        metricColorSignature = signature
+        metricColorEngine.evaluate(rules, items) { result -> runOnUiThread { result.onSuccess { next -> if (next != metricColorCache) { metricColorCache = next; renderStats(data) } } } }
+    }
+
+    private fun renderCustomMetricCard(container: LinearLayout, metric: CustomMetricDefinition, effectiveJson: JSONObject) {
+        val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(3), 0, dp(6)) }
+        val valueView = infoText("Evaluating…").apply { gravity = Gravity.END; setTextColor(MUTED) }
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val nameView = infoText(metric.name).apply { setTextColor(metricColorInt(metric.name, true, GREEN)); tooltipController.attachHold(this, { "Custom JavaScript metric. Inputs below auto-save and are restored on the next app launch." }) }
+        header.addView(nameView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(valueView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        card.addView(header, matchWidth()); container.addView(card, matchWidth())
+
+        fun evaluate() {
+            val inputs = customMetricInputsDraft.filterKeys { it.startsWith("${metric.id}:") }.mapKeys { it.key.substringAfter(':') }
+            customMetricEngine.evaluateObject(metric, effectiveJson, inputs) { evaluated -> runOnUiThread {
+                evaluated.fold(onFailure = { valueView.text = "Error: ${it.message}"; valueView.setTextColor(RED) }, onSuccess = { envelope ->
+                    val raw = envelope.opt("value")
+                    card.removeViews(1, (card.childCount - 1).coerceAtLeast(0))
+                    val obj = raw as? JSONObject
+                    val label = obj?.optString("label")?.takeIf { it.isNotBlank() } ?: metric.name
+                    nameView.text = label
+                    val displayValue = when (val v = obj?.opt("value") ?: raw) { null, JSONObject.NULL -> "N/A"; is JSONObject, is JSONArray -> v.toString(); else -> v.toString() }
+                    valueView.text = displayValue
+                    val numeric = displayValue.replace("%","").trim().toDoubleOrNull()
+                    val baseCustomColor = if ((numeric ?: 0.0) < 0) RED else GREEN
+                    valueView.setTextColor(metricColorInt(label, false, baseCustomColor))
+                    nameView.setTextColor(metricColorInt(label, true, baseCustomColor))
+                    if (metricColorMappingsDraft.any { it.enabled }) {
+                        metricColorEngine.evaluate(metricColorMappingsDraft, listOf(label to numeric)) { colorResult -> runOnUiThread {
+                            colorResult.getOrNull()?.get(label)?.let { colors ->
+                                colors.key?.let(::parseRuleColorOrNull)?.let(nameView::setTextColor)
+                                colors.value?.let(::parseRuleColorOrNull)?.let(valueView::setTextColor)
+                            }
+                        } }
                     }
-                }
-            }, matchWidth())
+                    val defs = obj?.optJSONArray("inputs") ?: JSONArray()
+                    for (i in 0 until defs.length()) {
+                        val spec = defs.optJSONObject(i) ?: continue
+                        val inputName = spec.optString("name").ifBlank { "input_$i" }
+                        val storageKey = "${metric.id}:$inputName"
+                        val saved = customMetricInputsDraft[storageKey]
+                        val default = spec.optString("default")
+                        val envBinding = spec.optString("env")
+                        val edit = styledInput(spec.optString("placeholder").ifBlank { inputName }).apply {
+                            setText(saved ?: envBinding.takeIf { it.startsWith("ENV.") }?.let(::readEnvironmentBinding) ?: default)
+                            setSingleLine(true)
+                            setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) {
+                                customMetricInputsDraft[storageKey] = text.toString()
+                                if (envBinding.startsWith("ENV.")) writeEnvironmentBinding(envBinding, text.toString())
+                                persistCustomMetricInputs()
+                                evaluate()
+                            } }
+                            setOnEditorActionListener { _, action, event ->
+                                val done = action == EditorInfo.IME_ACTION_DONE || action == EditorInfo.IME_ACTION_GO || (event?.keyCode == KeyEvent.KEYCODE_ENTER)
+                                if (done) { clearFocus(); true } else false
+                            }
+                        }
+                        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                        row.addView(infoText(spec.optString("label").ifBlank { inputName }).apply { setTextColor(MUTED) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, .42f))
+                        row.addView(edit, LinearLayout.LayoutParams(0, dp(40), .58f))
+                        card.addView(row, matchWidth())
+                    }
+                })
+            } }
         }
+        evaluate()
+    }
+
+    private fun readEnvironmentBinding(binding: String): String? {
+        val parts = binding.removePrefix("ENV.").split('.').filter { it.isNotBlank() }; if (parts.isEmpty()) return null
+        val definition = environmentVariablesDraft.firstOrNull { it.name.equals(parts.first(), true) } ?: return null
+        var value: Any? = runCatching { org.json.JSONTokener(definition.valueJson).nextValue() }.getOrNull()
+        parts.drop(1).forEach { part -> value = when (val current = value) { is JSONObject -> current.opt(part); is JSONArray -> part.toIntOrNull()?.let { current.opt(it) }; else -> null } }
+        return value?.takeUnless { it == JSONObject.NULL }?.toString()
+    }
+
+    private fun writeEnvironmentBinding(binding: String, rawValue: String) {
+        val parts = binding.removePrefix("ENV.").split('.').filter { it.isNotBlank() }; if (parts.isEmpty()) return
+        val index = environmentVariablesDraft.indexOfFirst { it.name.equals(parts.first(), true) }; if (index < 0) return
+        val definition = environmentVariablesDraft[index]
+        var root = runCatching { org.json.JSONTokener(definition.valueJson).nextValue() as? JSONObject }.getOrNull() ?: JSONObject()
+        var cursor = root
+        parts.drop(1).dropLast(1).forEach { part -> cursor = cursor.optJSONObject(part) ?: JSONObject().also { cursor.put(part, it) } }
+        val parsed: Any = rawValue.toDoubleOrNull() ?: when (rawValue.lowercase()) { "true" -> true; "false" -> false; else -> rawValue }
+        if (parts.size == 1) environmentVariablesDraft[index] = definition.copy(valueJson = jsonLiteral(parsed))
+        else { cursor.put(parts.last(), parsed); environmentVariablesDraft[index] = definition.copy(valueJson = root.toString()) }
+        persistEnvironmentVariables("ENV input updated.")
+    }
+
+    private fun metricColorInt(name: String, key: Boolean, fallback: Int): Int {
+        val colors = metricColorCache.entries.firstOrNull { it.key.equals(name, true) }?.value ?: return fallback
+        val value = if (key) colors.key else colors.value
+        return value?.let(::parseRuleColorOrNull) ?: fallback
     }
 
     private fun renderFinanceGroups(container: LinearLayout, finance: Statistics.FinanceStats, data: TableData) {
@@ -2878,17 +3523,17 @@ return Plot.plot({
             addFinancialMetric(c, "Emergency Fund", months(finance.emergencyFundMonths), "Estimated months of average spending covered by the observed positive surplus. This is not an account balance because Exvia does not know assets outside the selected rows.")
             addFinancialMetric(c, "Debt-To-Income ratio", pct(finance.debtToIncomeRatio), "Heuristic debt burden: expenses whose row text mentions debt, loan, credit, or mortgage divided by income.")
             addFinancialMetric(c, "Total Income", amount(finance.totalIncome), "Total value of rows whose money value begins with + in the visible dataset.", signed = finance.totalIncome)
-            addFinancialMetric(c, "Total Expenses", amount(finance.totalExpenses), "Total absolute value of non-+ money rows in the visible dataset.")
+            addFinancialMetric(c, "Total Expenses", amount(finance.totalExpenses), "Total absolute value of non-+ money rows in the visible dataset.", signed = finance.totalExpenses?.let { -it })
         }, matchWidth())
 
         container.addView(accordion("Expense", tooltip = "Spending size, frequency, growth, volatility, recurrence, and subscription load.") { c ->
-            addFinancialMetric(c, "Average and Median Expense", meanTemplate(finance.averageExpense, finance.expenseStdv, finance.medianExpense), "Mean ± population standard deviation of expenses, with median in parentheses.")
-            addFinancialMetric(c, "Largest Expense", amount(finance.largestExpense), "Largest single expense amount in the visible dataset.")
-            addFinancialMetric(c, "Expense Frequency per day", finance.expenseFrequencyPerDay?.let(::fmt) ?: "N/A", "Expense transaction count divided by the number of calendar days covered by the visible dated data.")
+            addFinancialMetric(c, "Average and Median Expense", meanTemplate(finance.averageExpense, finance.expenseStdv, finance.medianExpense), "Mean ± population standard deviation of expenses, with median in parentheses.", signed = finance.averageExpense?.let { -it })
+            addFinancialMetric(c, "Largest Expense", amount(finance.largestExpense), "Largest single expense amount in the visible dataset.", signed = finance.largestExpense?.let { -it })
+            addFinancialMetric(c, "Expense Frequency per day", finance.expenseFrequencyPerDay?.let(::fmt) ?: "N/A", "Expense transaction count divided by the number of calendar days covered by the visible dated data.", signed = finance.expenseFrequencyPerDay?.let { -it })
             addFinancialMetric(c, "Expense Growth Rate", pct(finance.expenseGrowthRate), "Percentage change from the first dated expense amount to the last dated expense amount.", signed = finance.expenseGrowthRate?.let { -it })
-            addFinancialMetric(c, "Expense Volatility", amount(finance.expenseVolatility), "Population standard deviation of individual expense amounts.")
-            addFinancialMetric(c, "Recurring Expense Ratio", pct(finance.recurringExpenseRatio), "Share of expense value whose row text looks recurring, such as recurring, subscription, rent, mortgage, utility, or monthly.")
-            addFinancialMetric(c, "Subscription Burden", pct(finance.subscriptionBurden), "Subscription-like spending divided by total income.")
+            addFinancialMetric(c, "Expense Volatility", amount(finance.expenseVolatility), "Population standard deviation of individual expense amounts.", signed = finance.expenseVolatility?.let { -it })
+            addFinancialMetric(c, "Recurring Expense Ratio", pct(finance.recurringExpenseRatio), "Share of expense value whose row text looks recurring, such as recurring, subscription, rent, mortgage, utility, or monthly.", signed = finance.recurringExpenseRatio?.let { -it })
+            addFinancialMetric(c, "Subscription Burden", pct(finance.subscriptionBurden), "Subscription-like spending divided by total income.", signed = finance.subscriptionBurden?.let { -it })
         }, matchWidth())
 
         container.addView(accordion("Income", tooltip = "Income level, stability, growth, diversity, recurrence, and timing.") { c ->
@@ -2909,7 +3554,7 @@ return Plot.plot({
             addFinancialMetric(c, "Period", listOfNotNull(finance.firstDate, finance.lastDate).joinToString(" → ").ifBlank { "N/A" }, "First to last parseable datetime in the visible data.")
             if (finance.categorySpending.isNotEmpty()) {
                 c.addView(infoText("Spending by ${data.tickerKey ?: "category"}").apply { setTextColor(MUTED); AppFonts.apply(this, bold = true); tooltipController.attachHold(this, { "Largest expense categories/tickers by total amount." }) }, spacedMatchWidth(3))
-                finance.categorySpending.forEach { (name, value) -> addFinancialMetric(c, name, fmt(value), "Total visible expense assigned to this category/ticker.") }
+                finance.categorySpending.forEach { (name, value) -> addFinancialMetric(c, name, fmt(value), "Total visible expense assigned to this category/ticker.", signed = -value) }
             }
         }, matchWidth())
 
@@ -2917,18 +3562,14 @@ return Plot.plot({
             addFinancialMetric(c, "Cash Burn Rate", finance.cashBurnRate?.let { "${fmt(it)}/day" } ?: "N/A", "Average daily expenses minus average daily income over the visible period. Positive means cash is being consumed.", signed = finance.cashBurnRate?.let { -it })
             addFinancialMetric(c, "Cash Reserve Days", days(finance.cashReserveDays), "Observed positive net cash flow divided by average daily expenses. It is a surplus-coverage estimate, not your actual bank balance.")
             addFinancialMetric(c, "Average Daily Balance", amount(finance.averageDailyBalance), "Average reconstructed daily closing balance when the selected period starts at zero and applies visible income/expenses chronologically.", signed = finance.averageDailyBalance)
-            addFinancialMetric(c, "Days Until Cash Runs Out", days(finance.daysUntilCashRunsOut), "Simple forecast: reconstructed ending balance divided by positive daily cash burn. N/A when there is no positive balance or no current burn.")
+            addFinancialMetric(c, "Days Until Cash Runs Out", days(finance.daysUntilCashRunsOut), "Simple forecast: reconstructed ending balance divided by positive daily cash burn. N/A when there is no positive balance or no current burn.", signed = finance.daysUntilCashRunsOut)
         }, matchWidth())
     }
 
     private fun addFinancialMetric(container: LinearLayout, name: String, value: String, tooltip: String, signed: Double? = null) {
-        val color = when {
-            signed == null -> WHITE
-            signed < 0.0 -> RED
-            signed > 0.0 -> GREEN
-            else -> MUTED
-        }
-        addMetric(container, name, value, nameColor = MUTED, valueColor = color, tooltip = tooltip)
+        val inferred = signed ?: value.replace("%", "").substringBefore('/').trim().toDoubleOrNull()
+        val defaultColor = when { inferred != null && inferred < 0.0 -> RED; else -> GREEN }
+        addMetric(container, name, value, nameColor = metricColorInt(name, true, defaultColor), valueColor = metricColorInt(name, false, defaultColor), tooltip = tooltip)
     }
 
     private fun statTooltip(name: String): String = when (name) {
@@ -3105,10 +3746,10 @@ return Plot.plot({
         tooltip: String? = null,
     ) {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(2), 0, dp(2)) }
-        val nameView = infoText(name).apply { setTextColor(nameColor) }
+        val nameView = infoText(name).apply { setTextColor(metricColorInt(name, true, nameColor)) }
         tooltip?.let { description -> tooltipController.attachHold(nameView, { description }) }
         row.addView(nameView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val valueView = infoText(value).apply { gravity = Gravity.END; setTextColor(valueColor) }
+        val valueView = infoText(value).apply { gravity = Gravity.END; setTextColor(metricColorInt(name, false, valueColor)) }
         tooltip?.let { description -> tooltipController.attachHold(valueView, { description }) }
         row.addView(valueView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         container.addView(row, matchWidth())
@@ -3118,9 +3759,9 @@ return Plot.plot({
         val color = when {
             value == null || value.isNaN() || value.isInfinite() -> MUTED
             value < 0.0 -> RED
-            else -> metricColor
+            else -> GREEN
         }
-        addMetric(container, name, value?.let(::fmt) ?: "N/A", nameColor = metricColor, valueColor = color, tooltip = statTooltip(name))
+        addMetric(container, name, value?.let(::fmt) ?: "N/A", nameColor = color, valueColor = color, tooltip = statTooltip(name))
     }
 
     private fun addSignedMetric(container: LinearLayout, name: String, value: Double?, suffix: String = "") {
@@ -3250,7 +3891,7 @@ return Plot.plot({
                 if (name.isBlank()) { output.error = "Output file is required"; return@setOnClickListener }
                 if (!name.endsWith(".json", true)) name += ".json"
                 dialog.dismiss()
-                mainViewModel.executeFileScript(settings, definition.script, name)
+                mainViewModel.executeFileScript(settings, resolveEnvInQuery(definition.script), name)
                 showTab(Tab.FILES)
             }
         }
@@ -3401,6 +4042,16 @@ return Plot.plot({
         return token
     }
 
+    private fun statusColor(message: String): Int {
+        val value = message.lowercase(Locale.US)
+        return when {
+            listOf("error", "failed", "failure", "authentication", "invalid", "conflict", "not found", "cannot", "unable").any(value::contains) -> RED
+            listOf("saving", "syncing", "loading", "creating", "evaluating", "refreshing", "pulling", "reverting", "staging", "working").any(value::contains) -> LOG_YELLOW
+            listOf("saved", "synchronized", "created", "loaded", "removed", "updated", "complete", "success", "reverted", "amended", "restored").any(value::contains) -> LOG_GREEN
+            else -> LOG_BLUE
+        }
+    }
+
     private fun setBusy(isBusy: Boolean, message: String? = null) {
         busy = isBusy
         if (::amendButton.isInitialized) amendButton.isEnabled = !isBusy && selectedPath != null
@@ -3410,6 +4061,10 @@ return Plot.plot({
         if (::resyncButton.isInitialized) {
             resyncButton.isEnabled = !isBusy
             resyncButton.alpha = if (isBusy) 0.45f else 1f
+        }
+        if (::gitButton.isInitialized) {
+            gitButton.isEnabled = !isBusy
+            gitButton.alpha = if (isBusy) 0.45f else 1f
         }
         formInputs.values.forEach { it.isEnabled = !isBusy }
         if (isBusy && pageJumpInput != null) cancelPageJump()

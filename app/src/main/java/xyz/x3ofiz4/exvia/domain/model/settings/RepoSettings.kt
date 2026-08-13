@@ -1,6 +1,11 @@
 package xyz.x3ofiz4.exvia.domain.model.settings
 
 import xyz.x3ofiz4.exvia.domain.model.custom.CustomMetricDefinition
+import xyz.x3ofiz4.exvia.domain.model.custom.EnvironmentVariableDefinition
+import xyz.x3ofiz4.exvia.domain.model.custom.NotificationRule
+import xyz.x3ofiz4.exvia.domain.model.custom.SchemaRuleDefinition
+import xyz.x3ofiz4.exvia.domain.model.custom.MetricColorRule
+import xyz.x3ofiz4.exvia.domain.model.custom.ScriptGroupDefinition
 import xyz.x3ofiz4.exvia.domain.model.custom.CustomPlotDefinition
 import xyz.x3ofiz4.exvia.domain.model.custom.FileScriptDefinition
 import xyz.x3ofiz4.exvia.domain.model.custom.NamedPlotTheme
@@ -29,12 +34,21 @@ data class RepoSettings(
     val financeColumns: List<String>,
     val customMetrics: List<CustomMetricDefinition>,
     val customPlots: List<CustomPlotDefinition>,
+    val scriptGroups: List<ScriptGroupDefinition>,
+    val environmentVariables: List<EnvironmentVariableDefinition>,
+    val notificationRules: List<NotificationRule>,
+    val schemaRules: List<SchemaRuleDefinition>,
+    val metricColorMappings: List<MetricColorRule>,
+    /** Persisted values for Custom Metric input templates, keyed by `<metricId>:<inputName>`. */
+    val customMetricInputs: Map<String, String>,
     val fileScripts: List<FileScriptDefinition>,
     val imaginaryFields: List<xyz.x3ofiz4.exvia.domain.model.custom.ImaginaryFieldDefinition>,
     val uiScale: Double,
     val textScale: Double,
     val rowsPerPage: Int,
     val undoHistoryLimit: Int,
+    /** When false, Table CRUD is staged locally until Git → Amend is pressed. */
+    val automaticAmend: Boolean,
     val themePreset: ThemePreset,
     val palette: ThemePalette,
     val plotTheme: PlotTheme,

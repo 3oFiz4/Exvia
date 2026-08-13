@@ -3,11 +3,18 @@ package xyz.x3ofiz4.exvia.domain.model.custom
 import xyz.x3ofiz4.exvia.domain.model.theme.PlotTheme
 import xyz.x3ofiz4.exvia.domain.model.theme.ThemePalette
 
+data class ScriptGroupDefinition(
+    val id: String,
+    val name: String,
+)
+
 data class CustomMetricDefinition(
     val id: String,
     val name: String,
     val script: String,
     val enabled: Boolean = true,
+    /** Shared Custom Accordion id. Older scripts migrate to `default`. */
+    val groupId: String = DEFAULT_SCRIPT_GROUP_ID,
 )
 
 data class FilterSnippet(
@@ -24,9 +31,6 @@ data class FilterSnippet(
  * table['MATCHING_ROW'].back = "#ff0000aa"
  * table['MATCHING_ROW']['PRICE'].fore = "#ffffff"
  * table['MATCHING_ROW']['DESCRIPTION'].content = "Over budget: ${'$'}{DESCRIPTION}"
- *
- * The small assignment language is deliberately constrained: it may only
- * change .back, .fore, and .content on the matching row or one matching cell.
  */
 data class TableStyleRule(
     val id: String,
@@ -46,6 +50,8 @@ data class CustomPlotDefinition(
     val script: String,
     val engine: String = "auto",
     val enabled: Boolean = true,
+    /** Shared Custom Accordion id. Older scripts migrate to `default`. */
+    val groupId: String = DEFAULT_SCRIPT_GROUP_ID,
 )
 
 data class FileScriptDefinition(
@@ -62,6 +68,42 @@ data class ImaginaryFieldSnippet(
     val description: String = "",
 )
 
+/** A persistent Exvia environment variable. This is not an OS/.env variable. */
+data class EnvironmentVariableDefinition(
+    val id: String,
+    val name: String,
+    /** JavaScript initializer. `return ...` is accepted. */
+    val initializerScript: String = "return null;",
+    /** Last persistent runtime value encoded as JSON. */
+    val valueJson: String = "null",
+    val enabled: Boolean = true,
+)
+
+/** Android notification automation driven by one of Exvia's predefined events. */
+data class NotificationRule(
+    val id: String,
+    val name: String,
+    val eventName: String,
+    val script: String,
+    val enabled: Boolean = true,
+)
+
+/** JavaScript schema policy evaluated for each real or imaginary key. */
+data class SchemaRuleDefinition(
+    val id: String,
+    val name: String,
+    val script: String,
+    val enabled: Boolean = true,
+)
+
+/** JavaScript override for the key/value color of a rendered statistic/finance/custom metric. */
+data class MetricColorRule(
+    val id: String,
+    val name: String,
+    val metricName: String,
+    val script: String,
+    val enabled: Boolean = true,
+)
 
 /**
  * A computed field that exists only in Exvia's effective table clone. It never
@@ -89,3 +131,5 @@ data class NamedPlotTheme(
     val name: String,
     val theme: PlotTheme,
 )
+
+const val DEFAULT_SCRIPT_GROUP_ID = "default"

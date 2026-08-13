@@ -46,18 +46,19 @@ class MainViewModel(
         publishSnapshot(snapshot, initialStatus(snapshot))
     }
 
-    fun synchronize(settings: RepoSettings) = launch(
-        "Re-syncing ${settings.folder.ifBlank { "/" }}/ with GitHub…",
-        "Automatic GitHub sync failed",
+    fun synchronize(settings: RepoSettings, discardStaged: Boolean = false) = launch(
+        if (discardStaged) "Pulling ${settings.branch} and discarding local stage…" else "Re-syncing ${settings.folder.ifBlank { "/" }}/ with GitHub…",
+        "GitHub re-sync failed",
     ) {
         automaticMappings = settings.colorMappings
-        val snapshot = repository.synchronize(settings)
+        val snapshot = repository.synchronize(settings, discardStaged)
         clearHistory()
         publishSnapshot(snapshot, if (snapshot.selectedPath == null) {
             "Re-sync complete. No .json files found in ${settings.folder}/."
         } else {
-            "Re-synced ${snapshot.tableData.rows.size} row(s) from ${snapshot.selectedPath.substringAfterLast('/')}."
+            if (snapshot.hasStagedChanges) "Remote index refreshed; local staged table remains active for ${snapshot.selectedPath.substringAfterLast('/')}." else "Re-synced ${snapshot.tableData.rows.size} row(s) from ${snapshot.selectedPath.substringAfterLast('/')}."
         })
+        effects.emit(MainEffect.AutomationEvent("event.resync", mapOf("rows" to snapshot.tableData.rows.size.toString(), "file" to (snapshot.selectedPath ?: ""))))
     }
 
     fun selectFile(settings: RepoSettings, path: String, forceNetwork: Boolean = false) = launch(
@@ -170,7 +171,7 @@ class MainViewModel(
             effects.emit(MainEffect.ToastMessage("Select or create a JSON file first."))
             return
         }
-        launch("Committing to ${path.substringAfterLast('/')}…", "Amend failed") {
+        launch(if (settings.automaticAmend) "Committing to ${path.substringAfterLast('/')}…" else "Staging ${path.substringAfterLast('/')} locally…", "Amend failed") {
             automaticMappings = settings.colorMappings
             val (snapshot, date) = repository.appendRow(settings, state.value.files, path, values)
             val appended = snapshot.tableData.rows.maxByOrNull { it.originalIndex }
@@ -178,7 +179,10 @@ class MainViewModel(
                 RowHistoryEntry(path, appended.originalIndex, null, LinkedHashMap(appended.values), "Amend"),
                 settings.undoHistoryLimit,
             )
-            publishSnapshot(snapshot, "Committed and cached at $date.")
+            publishSnapshot(snapshot, if (snapshot.hasStagedChanges) "Staged locally at $date. Use Git → Amend to commit and push." else "Committed and cached at $date.")
+            val moneyKey = snapshot.tableData.moneyKey ?: settings.moneyKeyOverride.ifBlank { "PRICE" }
+            val amount = appended?.values?.get(moneyKey).orEmpty()
+            effects.emit(MainEffect.AutomationEvent("event.amend", mapOf("date" to date, "amount" to amount, "description" to (appended?.values?.get("DESCRIPTION") ?: appended?.values?.get("description") ?: ""), "file" to path.substringAfterLast('/'))))
         }
     }
 
@@ -191,7 +195,7 @@ class MainViewModel(
             val snapshot = repository.updateRow(settings, state.value.files, path, row, values)
             val after = snapshot.tableData.rows.firstOrNull { it.originalIndex == row.originalIndex }?.values?.let(::LinkedHashMap)
             if (after != null) recordHistory(RowHistoryEntry(path, row.originalIndex, before, after, "Edit row"), settings.undoHistoryLimit)
-            publishSnapshot(snapshot, "Row updated and cached.")
+            publishSnapshot(snapshot, if (snapshot.hasStagedChanges) "Row updated in the local stage." else "Row updated and cached.")
         }
     }
 
@@ -222,7 +226,7 @@ class MainViewModel(
             automaticMappings = settings.colorMappings
             val snapshot = repository.deleteRow(settings, state.value.files, path, row)
             recordHistory(RowHistoryEntry(path, row.originalIndex, before, null, "Delete row"), settings.undoHistoryLimit)
-            publishSnapshot(snapshot, "Row removed and cached.")
+            publishSnapshot(snapshot, if (snapshot.hasStagedChanges) "Row removal staged locally." else "Row removed and cached.")
         }
     }
 
@@ -234,6 +238,37 @@ class MainViewModel(
     fun redo(settings: RepoSettings) {
         val entry = redoStack.lastOrNull() ?: return
         applyHistory(settings, entry, undo = false)
+    }
+
+    fun loadGitHistory(settings: RepoSettings, page: Int, perPage: Int = 15) = launch(
+        "Loading commit history…", "Could not load Git history",
+    ) {
+        val commits = repository.listCommits(settings, page, perPage)
+        state.update { it.copy(busy = false, status = "Loaded commit page ${commits.page}.") }
+        effects.emit(MainEffect.GitHistoryLoaded(commits))
+    }
+
+    fun amendStaged(settings: RepoSettings) {
+        val path = state.value.selectedPath ?: run {
+            effects.emit(MainEffect.ToastMessage("Select a JSON file first."))
+            return
+        }
+        if (!state.value.hasStagedChanges) {
+            effects.emit(MainEffect.ToastMessage("There are no staged Table changes to amend."))
+            return
+        }
+        launch("Committing and pushing staged changes…", "Staged amend failed") {
+            val snapshot = repository.amendStaged(settings, state.value.files, path)
+            publishSnapshot(snapshot, "Staged changes committed and pushed to ${settings.branch}.")
+        }
+    }
+
+    fun revertToCommit(settings: RepoSettings, commitSha: String) = launch(
+        "Reverting repository to ${commitSha.take(7)}…", "Commit revert failed",
+    ) {
+        val snapshot = repository.revertToCommit(settings, commitSha)
+        clearHistory()
+        publishSnapshot(snapshot, "Created a revert commit restoring ${commitSha.take(7)}.")
     }
 
     fun executeFileScript(settings: RepoSettings, script: String, outputFile: String) = launch(
@@ -267,12 +302,17 @@ class MainViewModel(
         val limit = configuredLimit.coerceIn(1, 50)
         while (undoStack.size > limit) undoStack.removeFirst()
         redoStack.clear()
+        syncHistoryFlags()
     }
 
     private fun clearHistory() {
         undoStack.clear()
         redoStack.clear()
-        state.update { it.copy(canUndo = false, canRedo = false) }
+        syncHistoryFlags()
+    }
+
+    private fun syncHistoryFlags() {
+        state.update { it.copy(canUndo = undoStack.isNotEmpty(), canRedo = redoStack.isNotEmpty()) }
     }
 
     private fun applyHistory(settings: RepoSettings, entry: RowHistoryEntry, undo: Boolean) {
@@ -302,6 +342,7 @@ class MainViewModel(
                 if (undo) "Undo Exvia table change: ${entry.label}" else "Redo Exvia table change: ${entry.label}",
             )
             if (undo) { undoStack.removeLast(); redoStack.addLast(entry) } else { redoStack.removeLast(); undoStack.addLast(entry) }
+            syncHistoryFlags()
             publishSnapshot(snapshot, if (undo) "Undo complete: ${entry.label}." else "Redo complete: ${entry.label}.")
         }
     }
@@ -319,6 +360,8 @@ class MainViewModel(
             imaginaryKeys = emptySet(),
             canUndo = undoStack.isNotEmpty(),
             canRedo = redoStack.isNotEmpty(),
+            hasStagedChanges = snapshot.hasStagedChanges,
+            hasAnyStagedChanges = snapshot.hasAnyStagedChanges,
             busy = false,
             status = status,
             revision = current.revision + 1,
@@ -366,6 +409,7 @@ class MainViewModel(
 
     private fun initialStatus(snapshot: WorkspaceSnapshot): String = when {
         snapshot.selectedPath == null -> "Loaded cached file list. No JSON files are available."
+        snapshot.source == DataSource.STAGED -> "Loaded ${snapshot.tableData.rows.size} locally staged row(s) from ${snapshot.selectedPath.substringAfterLast('/')}."
         snapshot.source == DataSource.CACHE -> "Loaded ${snapshot.tableData.rows.size} row(s) from local cache: ${snapshot.selectedPath.substringAfterLast('/')}."
         else -> "Loaded ${snapshot.tableData.rows.size} row(s) from ${snapshot.selectedPath.substringAfterLast('/')}."
     }

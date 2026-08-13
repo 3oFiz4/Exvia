@@ -105,6 +105,26 @@ class SettingsViewModel(
         }
     }
 
+    fun saveScriptGroups(next: RepoSettings) = saveResource(next, "script groups", ".exvia/script-groups.json") { repository.synchronizeScriptGroups(it) }
+    fun saveEnvironmentVariables(next: RepoSettings) = saveResource(next, "environment variables", ".exvia/environment-variables.json") { repository.synchronizeEnvironmentVariables(it) }
+    fun saveNotificationRules(next: RepoSettings) = saveResource(next, "notification rules", ".exvia/notification-rules.json") { repository.synchronizeNotificationRules(it) }
+    fun saveSchemaRules(next: RepoSettings) = saveResource(next, "schema rules", ".exvia/schema-rules.json") { repository.synchronizeSchemaRules(it) }
+    fun saveMetricColorMappings(next: RepoSettings) = saveResource(next, "metric color mappings", ".exvia/metric-color-mappings.json") { repository.synchronizeMetricColorMappings(it) }
+    fun saveCustomMetricInputs(next: RepoSettings) = saveResource(next, "custom metric inputs", ".exvia/custom-metric-inputs.json") { repository.synchronizeCustomMetricInputs(it) }
+
+    private fun saveResource(next: RepoSettings, label: String, path: String, sync: (RepoSettings) -> Unit) {
+        repository.saveTableRulesLocal(next)
+        state.update { it.copy(settings = next) }
+        if (!state.value.hasToken || !next.isConfigured()) {
+            effects.emit(SettingsEffect.TableRulesSaved("${label.replaceFirstChar { c -> c.uppercase() }} saved locally."))
+            return
+        }
+        launch("Synchronizing $label…", "$label saved locally, but GitHub sync failed") {
+            sync(next)
+            effects.emit(SettingsEffect.TableRulesSaved("${label.replaceFirstChar { c -> c.uppercase() }} synchronized to $path."))
+        }
+    }
+
     fun saveSettings(next: RepoSettings, enteredToken: String?, snippets: List<FilterSnippet>, developerMode: Boolean) {
         repository.saveLocal(next, enteredToken)
         repository.saveFilterSnippets(snippets)
@@ -115,14 +135,8 @@ class SettingsViewModel(
             return
         }
         launch("Saving settings and synchronizing configuration…", "Settings saved locally, but config sync failed") {
-            repository.synchronizeConfiguration(next, snippets, developerMode)
-            repository.synchronizeFilterSnippets(next, snippets)
-            repository.synchronizeTableRules(next)
-            repository.synchronizeCustomMetrics(next)
-            repository.synchronizeCustomPlots(next)
-            repository.synchronizeFileScripts(next)
-            repository.synchronizeImaginaryFields(next)
-            effects.emit(SettingsEffect.Reload("Settings and Exvia workspace resources synchronized under .exvia/."))
+            repository.synchronizeWorkspace(next, snippets, developerMode)
+            effects.emit(SettingsEffect.Reload("Settings and Exvia workspace resources synchronized under .exvia/ in one commit."))
         }
     }
 

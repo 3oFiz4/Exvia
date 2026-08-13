@@ -23,7 +23,11 @@ import java.util.ArrayDeque
  * plot accordion is attached, then returned to the pool. Custom metrics share
  * one separate serial runtime so metric evaluation never creates a WebView.
  */
-class PlotWebRuntime(private val activity: Activity) {
+class PlotWebRuntime(
+    private val activity: Activity,
+    private val environmentProvider: () -> JSONObject = { JSONObject() },
+    private val onEnvironmentChanged: (JSONObject) -> Unit = {},
+) {
     internal class Slot(val webView: WebView) {
         var ready = false
         val pending = ArrayDeque<() -> Unit>()
@@ -65,15 +69,21 @@ class PlotWebRuntime(private val activity: Activity) {
     }
 
     internal fun render(slot: Slot, payload: JSONObject, callback: ((String?) -> Unit)? = null) {
-        execute(slot, "window.ExviaRuntime.render(${payload});", callback)
+        val enriched = withEnvironment(payload)
+        execute(slot, "window.ExviaRuntime.render(${enriched});") { encoded ->
+            consumeEnvironment(encoded)
+            callback?.invoke(encoded)
+        }
     }
 
     fun evaluateMetric(payload: JSONObject, callback: (Result<String>) -> Unit) {
         val slot = metricSlot ?: createSlot().also { metricSlot = it }
-        execute(slot, "window.ExviaRuntime.evaluateMetric(${payload});") { encoded ->
+        val enriched = withEnvironment(payload)
+        execute(slot, "window.ExviaRuntime.evaluateMetric(${enriched});") { encoded ->
             try {
                 val decoded = decodeEvaluateResult(encoded)
                 val result = JSONObject(decoded)
+                result.optJSONObject("env")?.let(onEnvironmentChanged)
                 if (!result.optBoolean("ok")) {
                     throw IllegalArgumentException(result.optString("error", "Custom metric failed"))
                 }
@@ -88,12 +98,29 @@ class PlotWebRuntime(private val activity: Activity) {
         }
     }
 
-    fun evaluateFormulas(payload: JSONObject, callback: (Result<JSONObject>) -> Unit) {
+
+    fun evaluateMetricObject(payload: JSONObject, callback: (Result<JSONObject>) -> Unit) {
         val slot = metricSlot ?: createSlot().also { metricSlot = it }
-        execute(slot, "window.ExviaRuntime.evaluateFormulaBatch(${payload});") { encoded ->
+        val enriched = withEnvironment(payload)
+        execute(slot, "window.ExviaRuntime.evaluateMetric(${enriched});") { encoded ->
             try {
                 val decoded = decodeEvaluateResult(encoded)
                 val result = JSONObject(decoded)
+                result.optJSONObject("env")?.let(onEnvironmentChanged)
+                if (!result.optBoolean("ok")) throw IllegalArgumentException(result.optString("error", "Custom metric failed"))
+                callback(Result.success(result))
+            } catch (error: Exception) { callback(Result.failure(error)) }
+        }
+    }
+
+    fun evaluateFormulas(payload: JSONObject, callback: (Result<JSONObject>) -> Unit) {
+        val slot = metricSlot ?: createSlot().also { metricSlot = it }
+        val enriched = withEnvironment(payload)
+        execute(slot, "window.ExviaRuntime.evaluateFormulaBatch(${enriched});") { encoded ->
+            try {
+                val decoded = decodeEvaluateResult(encoded)
+                val result = JSONObject(decoded)
+                result.optJSONObject("env")?.let(onEnvironmentChanged)
                 if (!result.optBoolean("ok")) {
                     throw IllegalArgumentException(result.optString("error", "Field formula evaluation failed"))
                 }
@@ -101,6 +128,36 @@ class PlotWebRuntime(private val activity: Activity) {
             } catch (error: Exception) {
                 callback(Result.failure(error))
             }
+        }
+    }
+
+    fun evaluateNotification(payload: JSONObject, callback: (Result<JSONObject>) -> Unit) = evaluateObject("evaluateNotification", payload, callback)
+    fun evaluateSchema(payload: JSONObject, callback: (Result<JSONObject>) -> Unit) = evaluateObject("evaluateSchemaBatch", payload, callback)
+    fun evaluateMetricColors(payload: JSONObject, callback: (Result<JSONObject>) -> Unit) = evaluateObject("evaluateMetricColorBatch", payload, callback)
+
+    private fun evaluateObject(functionName: String, payload: JSONObject, callback: (Result<JSONObject>) -> Unit) {
+        val slot = metricSlot ?: createSlot().also { metricSlot = it }
+        val enriched = withEnvironment(payload)
+        execute(slot, "window.ExviaRuntime.$functionName(${enriched});") { encoded ->
+            try {
+                val decoded = decodeEvaluateResult(encoded)
+                val result = JSONObject(decoded)
+                result.optJSONObject("env")?.let(onEnvironmentChanged)
+                if (!result.optBoolean("ok")) throw IllegalArgumentException(result.optString("error", "$functionName failed"))
+                callback(Result.success(result))
+            } catch (error: Exception) { callback(Result.failure(error)) }
+        }
+    }
+
+    private fun withEnvironment(payload: JSONObject): JSONObject = JSONObject(payload.toString()).apply {
+        if (!has("environment")) put("environment", environmentProvider())
+    }
+
+    private fun consumeEnvironment(encoded: String?) {
+        runCatching {
+            val decoded = decodeEvaluateResult(encoded)
+            if (decoded.isBlank()) return@runCatching
+            JSONObject(decoded).optJSONObject("env")?.let(onEnvironmentChanged)
         }
     }
 

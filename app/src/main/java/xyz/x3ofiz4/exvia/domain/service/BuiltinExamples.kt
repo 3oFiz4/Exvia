@@ -1,10 +1,5 @@
 package xyz.x3ofiz4.exvia.domain.service
-import xyz.x3ofiz4.exvia.domain.model.custom.CustomMetricDefinition
-import xyz.x3ofiz4.exvia.domain.model.custom.CustomPlotDefinition
-import xyz.x3ofiz4.exvia.domain.model.custom.FilterSnippet
-import xyz.x3ofiz4.exvia.domain.model.custom.FileScriptDefinition
-import xyz.x3ofiz4.exvia.domain.model.custom.ImaginaryFieldSnippet
-import xyz.x3ofiz4.exvia.domain.model.custom.TableStyleRule
+import xyz.x3ofiz4.exvia.domain.model.custom.*
 
 
 object BuiltinExamples {
@@ -46,27 +41,36 @@ object BuiltinExamples {
             id = "mapping_price_income",
             name = "PRICE · income",
             query = "SELECT * WHERE REGEXP(price, '^\\+')",
-            foregroundScript = "table['MATCHING_ROW']['PRICE'].fore = \"#34C759\"",
+            foregroundScript = "table.PRICE.fore = \"#34C759\"",
         ),
         TableStyleRule(
             id = "mapping_price_expense",
             name = "PRICE · expense",
             query = "SELECT * WHERE price IS NOT NULL AND NOT REGEXP(price, '^\\+')",
-            foregroundScript = "table['MATCHING_ROW']['PRICE'].fore = \"#F72323\"",
+            foregroundScript = "table.PRICE.fore = \"#F72323\"",
         ),
         TableStyleRule(
             id = "mapping_category_food",
             name = "CATEGORY · FD",
             query = "SELECT * WHERE category = 'FD'",
-            foregroundScript = "table['MATCHING_ROW']['CATEGORY'].fore = \"#FFB300\"",
+            foregroundScript = "table.CATEGORY.fore = \"#FFB300\"",
         ),
         TableStyleRule(
             id = "mapping_category_beverage",
             name = "CATEGORY · BVG",
             query = "SELECT * WHERE category = 'BVG'",
-            foregroundScript = "table['MATCHING_ROW']['CATEGORY'].fore = \"#29B6F6\"",
+            foregroundScript = "table.CATEGORY.fore = \"#29B6F6\"",
         ),
     )
+    /** Compact Color Mapping examples. Legacy MATCHING_ROW syntax remains accepted. */
+    val colorMappingRules: List<TableStyleRule> = listOf(
+        TableStyleRule("mapping_example_price_red", "PRICE foreground · red", "SELECT * WHERE price >= 50", foregroundScript = "table.PRICE.fore = \"#F72323\"", enabled = false),
+        TableStyleRule("mapping_example_price_back", "PRICE background · warning", "SELECT * WHERE price >= 50", backgroundScript = "table.PRICE.back = \"#7A1010AA\"", enabled = false),
+        TableStyleRule("mapping_example_food", "Food description · orange", "SELECT * WHERE REGEXP(description, '(?i)food|lunch|dinner')", foregroundScript = "table.DESCRIPTION.fore = \"#F59E0B\"", enabled = false),
+        TableStyleRule("mapping_example_income", "Positive PRICE · green", "SELECT * WHERE REGEXP(price, '^\\+')", foregroundScript = "table.PRICE.fore = \"#34C759\"", enabled = false),
+        TableStyleRule("mapping_example_row", "Large transaction · whole row", "SELECT * WHERE price >= 100", backgroundScript = "table.back = \"#3B0A0AAA\"", enabled = false),
+    )
+
     val filterSnippets: List<FilterSnippet> = listOf(
         FilterSnippet(
             id = "example_date_month",
@@ -833,6 +837,82 @@ object BuiltinExamples {
                 ORDER BY __file, __row;
             """.trimIndent(),
         ),
+    )
+
+    val environmentVariables: List<EnvironmentVariableDefinition> = listOf(
+        EnvironmentVariableDefinition("env_budget", "budget", "return {daily:50, monthly:1500, currency:'USD'};"),
+        EnvironmentVariableDefinition("env_alerts", "alerts", "return {zscore:2, enabled:true};"),
+        EnvironmentVariableDefinition("env_windows", "window", "return {rollingDays:7, forecastDays:30};"),
+        EnvironmentVariableDefinition("env_categories", "categoryTargets", "return {FD:300, BVG:120, TRANSPORT:250};"),
+        EnvironmentVariableDefinition("env_profile", "profile", "return {name:'', locale:'en', preferredMoneyKey:'PRICE'};"),
+    )
+
+    val notificationRules: List<NotificationRule> = listOf(
+        NotificationRule(
+            "notify_amend_zscore", "Amend · ±2σ expense warning", "event.amend", enabled = false,
+            script = """
+                const amount = Number(String(event.amount ?? '').replace(/,/g, ''));
+                const mean = Number(metric('Mean'));
+                const stdv = Number(metric('STDV'));
+                const limit = Number(ENV.alerts.get('zscore') ?? 2);
+                if (!Number.isFinite(amount) || !Number.isFinite(mean) || !Number.isFinite(stdv) || stdv <= 0) return {notify:false};
+                const z = (amount - mean) / stdv;
+                if (Math.abs(z) <= limit) return {notify:false};
+                return {notify:true, severity:'red', title:'Unusual expense', body:`${'$'}{amount} is ${'$'}{z.toFixed(2)}σ from the recent mean.`};
+            """.trimIndent(),
+        ),
+        NotificationRule("notify_amend", "Amend · saved", "event.amend", "return {notify:true,title:'Expense amended',body:String(event.description || event.amount || 'Saved')};", false),
+        NotificationRule("notify_amend_budget", "Amend · over ENV budget", "event.amend", "const x=Math.abs(Number(String(event.amount??'').replace(/,/g,''))); const b=Number(ENV.budget.get('daily')??50); return Number.isFinite(x)&&x>b?{notify:true,severity:'red',title:'Daily budget threshold',body:'Recent expense '+x+' exceeds '+b}:{notify:false};", false),
+        NotificationRule("notify_resync", "Re-sync · completed toast", "event.resync", "return {notify:false,IS_TOAST:true,title:'Exvia synchronized',body:`${'$'}{event.rows ?? 0} row(s) loaded from GitHub.`};", false),
+        NotificationRule("notify_settings", "Settings · saved", "event.save", "return {notify:true,title:'Exvia settings saved',body:'Configuration was saved and synchronized.'};", false),
+    )
+
+    val schemaRules: List<SchemaRuleDefinition> = listOf(
+        SchemaRuleDefinition("schema_bool", "Boolean is_/has_ fields", """
+            if (/^(is|has)(_|[A-Z])/i.test(key)) return {
+              DEFAULT_VALUE:'0', HIDDEN:false, NUMBER_ONLY_KEYPAD:true,
+              PLACEHOLDER:'0 or 1', AUTO_COMPLETION:false, BOOLEAN_01:true
+            };
+            return {};
+        """.trimIndent(), false),
+        SchemaRuleDefinition("schema_price", "Money-like numeric keypad", "if (/^(price|amount|cost|total)$/i.test(key)) return {NUMBER_ONLY_KEYPAD:true,PLACEHOLDER:'0.00',AUTO_COMPLETION:true}; return {};", false),
+        SchemaRuleDefinition("schema_date", "Date placeholder", "if (/date|time/i.test(key)) return {PLACEHOLDER:'d/M/yy @ HH:mm',AUTO_COMPLETION:true}; return {};", false),
+        SchemaRuleDefinition("schema_internal", "Hide underscore-prefixed fields", "if (/^_/.test(key)) return {HIDDEN:true,AUTO_COMPLETION:false}; return {};", false),
+        SchemaRuleDefinition("schema_category", "Uppercase category suggestions", "if (/category|ticker|code/i.test(key)) return {AUTO_COMPLETION:true,AUTO_COMPLETION_PARSING:'uppercase'}; return {};", false),
+    )
+
+    val metricColorRules: List<MetricColorRule> = listOf(
+        MetricColorRule("metric_color_negative", "Any metric · negative red / positive green", "*", "const n=Number(metric.value); if(!Number.isFinite(n)) return {}; return {key:n<0?theme.negative:theme.positive,value:n<0?theme.negative:theme.positive};", false),
+        MetricColorRule("metric_color_key_only", "Mean · key only blue", "Mean", "return {key:theme.observation};", false),
+        MetricColorRule("metric_color_value_only", "Mean · value only accent", "Mean", "return {value:theme.accent};", false),
+        MetricColorRule("metric_color_savings", "Savings Rate · contextual", "Savings Rate", "const n=Number(metric.value); return {key:n>=0?theme.positive:theme.negative,value:n>=0?theme.positive:theme.negative};", false),
+        MetricColorRule("metric_color_expense_ratio", "Expense Ratio · <=100 green", "Expense Ratio", "const n=Number(metric.value); return {key:n<=100?theme.positive:theme.negative,value:n<=100?theme.positive:theme.negative};", false),
+        MetricColorRule(
+            "metric_color_mean_gap", "Mean · trust from Mean−Median gap", "Mean",
+            "const gap=Math.abs(Number(metrics('Mean − Median gap'))); const mean=Math.abs(Number(metric.value)); const ratio=mean>0?gap/mean:gap; const c=ratio<=0.05?theme.positive:(ratio<=0.20?'#F5C542':theme.negative); return {key:c,value:c};", false
+        ),
+        MetricColorRule("metric_color_volatility", "STDV · low relative spread", "STDV", "const s=Math.abs(Number(metric.value)); const m=Math.abs(Number(metrics('Mean'))); const r=m>0?s/m:s; const c=r<=0.25?theme.positive:(r<=0.60?'#F5C542':theme.negative); return {key:c,value:c};", false),
+    )
+
+    /** Input-returning custom metrics. The UI persists their inputs automatically. */
+    val customMetricInputExamples: List<CustomMetricDefinition> = listOf(
+        CustomMetricDefinition("metric_input_budget_period", "Example · Daily Budget / period", """
+            const period = Number(context.inputs.period || 30);
+            const budget = Number(context.inputs.budget || ENV.budget.get('daily') || 50);
+            return {label:'Daily Budget / period', value:budget * period, inputs:[
+              {name:'period',label:'Period',placeholder:'days',default:'30'},
+              {name:'budget',label:'Budget',placeholder:'daily budget',default:String(budget),env:'ENV.budget.daily'}
+            ]};
+        """.trimIndent(), false),
+        CustomMetricDefinition("metric_input_target_savings", "Example · Savings target", """
+            const target=Number(context.inputs.target||20); return {label:'Savings target',value:`${'$'}{target}%`,inputs:[{name:'target',label:'Target',placeholder:'%',default:'20'}]};
+        """.trimIndent(), false),
+        CustomMetricDefinition("metric_input_window", "Example · Rolling window", """
+            const days=Number(context.inputs.days||ENV.window.get('rollingDays')||7); return {label:'Rolling window',value:`${'$'}{days} days`,inputs:[{name:'days',label:'Days',placeholder:'7',default:String(days),env:'ENV.window.rollingDays'}]};
+        """.trimIndent(), false),
+        CustomMetricDefinition("metric_input_category_budget", "Example · Category budget", """
+            const category=context.inputs.category||'FD'; const value=Number(context.inputs.value||ENV.categoryTargets.get(category)||0); return {label:`${'$'}{category} budget`,value,inputs:[{name:'category',label:'Category',placeholder:'FD',default:'FD'},{name:'value',label:'Budget',placeholder:'amount',default:String(value)}]};
+        """.trimIndent(), false),
     )
 
 }

@@ -37,6 +37,12 @@ class GitHubApi(
         const val CUSTOM_PLOTS_PATH = ".exvia/custom-plots.json"
         const val FILE_SCRIPTS_PATH = ".exvia/file-scripts.json"
         const val IMAGINARY_FIELDS_PATH = ".exvia/imaginary-fields.json"
+        const val SCRIPT_GROUPS_PATH = ".exvia/script-groups.json"
+        const val ENVIRONMENT_VARIABLES_PATH = ".exvia/environment-variables.json"
+        const val NOTIFICATION_RULES_PATH = ".exvia/notification-rules.json"
+        const val SCHEMA_RULES_PATH = ".exvia/schema-rules.json"
+        const val METRIC_COLOR_MAPPINGS_PATH = ".exvia/metric-color-mappings.json"
+        const val CUSTOM_METRIC_INPUTS_PATH = ".exvia/custom-metric-inputs.json"
     }
     private data class EditableDocument(val root: Any, val items: JSONArray)
 
@@ -66,6 +72,45 @@ class GitHubApi(
             if (e.statusCode == 404) null else throw e
         }
         putFile(path, text, sha, message)
+    }
+
+    /**
+     * Writes many Exvia workspace files in one Git commit. This avoids the old
+     * per-file GET + Contents-API commit loop used by Save settings and reload.
+     */
+    fun upsertTextFilesAtomic(files: Map<String, String>, message: String) {
+        if (files.isEmpty()) return
+        val base = "https://api.github.com/repos/${encodeSegment(settings.owner)}/${encodeSegment(settings.repo)}"
+        val ref = JSONObject(request("GET", "$base/git/ref/heads/${encodeSegment(settings.branch)}"))
+        val headSha = ref.getJSONObject("object").getString("sha")
+        val headCommit = JSONObject(request("GET", "$base/git/commits/${encodeSegment(headSha)}"))
+        val baseTreeSha = headCommit.getJSONObject("tree").getString("sha")
+
+        val tree = JSONArray().apply {
+            files.forEach { (path, text) ->
+                put(JSONObject().apply {
+                    put("path", path.trimStart('/'))
+                    put("mode", "100644")
+                    put("type", "blob")
+                    put("content", text)
+                })
+            }
+        }
+        val createdTree = JSONObject(request("POST", "$base/git/trees", JSONObject().apply {
+            put("base_tree", baseTreeSha)
+            put("tree", tree)
+        }.toString()))
+        val newTreeSha = createdTree.getString("sha")
+        val createdCommit = JSONObject(request("POST", "$base/git/commits", JSONObject().apply {
+            put("message", message)
+            put("tree", newTreeSha)
+            put("parents", JSONArray().put(headSha))
+        }.toString()))
+        val newCommitSha = createdCommit.getString("sha")
+        request("PATCH", "$base/git/refs/heads/${encodeSegment(settings.branch)}", JSONObject().apply {
+            put("sha", newCommitSha)
+            put("force", false)
+        }.toString())
     }
 
     /** Creates an issue and applies the requested GitHub labels using the current PAT. */
@@ -330,6 +375,81 @@ class GitHubApi(
             "https://api.github.com/repos/${encodeSegment(login)}/${encodeSegment(repoName)}/contents/${encodePath(path)}",
             body.toString(),
         )
+    }
+
+
+    /** Lists repository commits for the configured branch using GitHub pagination. */
+    fun listCommits(page: Int, perPage: Int = 15): CommitPage {
+        val safePage = page.coerceAtLeast(1)
+        val safePerPage = perPage.coerceIn(5, 50)
+        val baseUrl = "https://api.github.com/repos/${encodeSegment(settings.owner)}/${encodeSegment(settings.repo)}/commits"
+        val url = "$baseUrl?sha=${encodeSegment(settings.branch)}&per_page=$safePerPage&page=$safePage"
+        val array = JSONArray(request("GET", url))
+        val commits = (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val sha = item.optString("sha")
+            if (sha.isBlank()) return@mapNotNull null
+            val commit = item.optJSONObject("commit") ?: JSONObject()
+            val authorData = commit.optJSONObject("author") ?: JSONObject()
+            val githubAuthor = item.optJSONObject("author")?.optString("login").orEmpty()
+            RepoCommit(
+                sha = sha,
+                shortSha = sha.take(7),
+                message = commit.optString("message").lineSequence().firstOrNull().orEmpty(),
+                author = githubAuthor.ifBlank { authorData.optString("name").ifBlank { "Unknown" } },
+                date = authorData.optString("date"),
+                htmlUrl = item.optString("html_url"),
+            )
+        }
+        return CommitPage(
+            page = safePage,
+            perPage = safePerPage,
+            commits = commits,
+            hasPrevious = safePage > 1,
+            hasNext = if (array.length() < safePerPage) false else {
+                val nextAbsoluteItem = safePage * safePerPage + 1
+                val probe = "$baseUrl?sha=${encodeSegment(settings.branch)}&per_page=1&page=$nextAbsoluteItem"
+                JSONArray(request("GET", probe)).length() > 0
+            },
+        )
+    }
+
+    /**
+     * Restores the complete repository tree from commitSha by creating a new commit whose
+     * parent is the current branch head. History is preserved; the branch is not force-reset.
+     */
+    fun revertRepositoryToCommit(commitSha: String): String {
+        require(commitSha.isNotBlank()) { "Commit SHA is required." }
+        val base = "https://api.github.com/repos/${encodeSegment(settings.owner)}/${encodeSegment(settings.repo)}"
+        val target = JSONObject(request("GET", "$base/git/commits/${encodeSegment(commitSha)}"))
+        val targetTreeSha = target.getJSONObject("tree").getString("sha")
+
+        val ref = JSONObject(request(
+            "GET",
+            "$base/git/ref/heads/${encodeSegment(settings.branch)}",
+        ))
+        val currentHead = ref.getJSONObject("object").getString("sha")
+        if (currentHead.equals(commitSha, ignoreCase = true)) return currentHead
+
+        val created = JSONObject(request(
+            "POST",
+            "$base/git/commits",
+            JSONObject().apply {
+                put("message", "Revert Exvia repository to ${commitSha.take(7)}")
+                put("tree", targetTreeSha)
+                put("parents", JSONArray().put(currentHead))
+            }.toString(),
+        ))
+        val newSha = created.getString("sha")
+        request(
+            "PATCH",
+            "$base/git/refs/heads/${encodeSegment(settings.branch)}",
+            JSONObject().apply {
+                put("sha", newSha)
+                put("force", false)
+            }.toString(),
+        )
+        return newSha
     }
 
     private fun parseTable(text: String): TableData {

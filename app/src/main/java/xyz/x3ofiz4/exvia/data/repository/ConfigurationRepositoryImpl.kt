@@ -48,6 +48,26 @@ class ConfigurationRepositoryImpl(
         )
     }
 
+    override fun synchronizeWorkspace(settings: RepoSettings, snippets: List<FilterSnippet>, developerMode: Boolean) {
+        val files = linkedMapOf(
+            GitHubApi.CONFIG_PATH to SettingsStore.settingsToConfigJson(settings, snippets, developerMode),
+            GitHubApi.FILTER_SNIPPETS_PATH to SettingsStore.filterSnippetsFileJson(snippets),
+            GitHubApi.FLAGGING_SNIPPETS_PATH to SettingsStore.flaggingRulesFileJson(settings.flaggingRules),
+            GitHubApi.COLOR_MAPPINGS_PATH to SettingsStore.colorMappingsFileJson(settings.colorMappings),
+            GitHubApi.CUSTOM_METRICS_PATH to SettingsStore.customMetricsFileJson(settings.customMetrics),
+            GitHubApi.CUSTOM_PLOTS_PATH to SettingsStore.customPlotsFileJson(settings.customPlots),
+            GitHubApi.FILE_SCRIPTS_PATH to SettingsStore.fileScriptsFileJson(settings.fileScripts),
+            GitHubApi.IMAGINARY_FIELDS_PATH to SettingsStore.imaginaryFieldsFileJson(settings.imaginaryFields),
+            GitHubApi.SCRIPT_GROUPS_PATH to SettingsStore.scriptGroupsFileJson(settings.scriptGroups),
+            GitHubApi.ENVIRONMENT_VARIABLES_PATH to SettingsStore.environmentVariablesFileJson(settings.environmentVariables),
+            GitHubApi.NOTIFICATION_RULES_PATH to SettingsStore.notificationRulesFileJson(settings.notificationRules),
+            GitHubApi.SCHEMA_RULES_PATH to SettingsStore.schemaRulesFileJson(settings.schemaRules),
+            GitHubApi.METRIC_COLOR_MAPPINGS_PATH to SettingsStore.metricColorMappingsFileJson(settings.metricColorMappings),
+            GitHubApi.CUSTOM_METRIC_INPUTS_PATH to SettingsStore.customMetricInputsFileJson(settings.customMetricInputs),
+        )
+        api(settings).upsertTextFilesAtomic(files, "Update Exvia workspace settings")
+    }
+
     override fun synchronizeFilterSnippets(settings: RepoSettings, snippets: List<FilterSnippet>) {
         api(settings).upsertTextFile(
             GitHubApi.FILTER_SNIPPETS_PATH,
@@ -102,6 +122,30 @@ class ConfigurationRepositoryImpl(
         )
     }
 
+    override fun synchronizeScriptGroups(settings: RepoSettings) {
+        api(settings).upsertTextFile(GitHubApi.SCRIPT_GROUPS_PATH, SettingsStore.scriptGroupsFileJson(settings.scriptGroups), "Update Exvia script groups")
+    }
+
+    override fun synchronizeEnvironmentVariables(settings: RepoSettings) {
+        api(settings).upsertTextFile(GitHubApi.ENVIRONMENT_VARIABLES_PATH, SettingsStore.environmentVariablesFileJson(settings.environmentVariables), "Update Exvia environment variables")
+    }
+
+    override fun synchronizeNotificationRules(settings: RepoSettings) {
+        api(settings).upsertTextFile(GitHubApi.NOTIFICATION_RULES_PATH, SettingsStore.notificationRulesFileJson(settings.notificationRules), "Update Exvia notification rules")
+    }
+
+    override fun synchronizeSchemaRules(settings: RepoSettings) {
+        api(settings).upsertTextFile(GitHubApi.SCHEMA_RULES_PATH, SettingsStore.schemaRulesFileJson(settings.schemaRules), "Update Exvia schema rules")
+    }
+
+    override fun synchronizeMetricColorMappings(settings: RepoSettings) {
+        api(settings).upsertTextFile(GitHubApi.METRIC_COLOR_MAPPINGS_PATH, SettingsStore.metricColorMappingsFileJson(settings.metricColorMappings), "Update Exvia metric color mappings")
+    }
+
+    override fun synchronizeCustomMetricInputs(settings: RepoSettings) {
+        api(settings).upsertTextFile(GitHubApi.CUSTOM_METRIC_INPUTS_PATH, SettingsStore.customMetricInputsFileJson(settings.customMetricInputs), "Update Exvia custom metric inputs")
+    }
+
     override fun createRepository(
         settings: RepoSettings,
         username: String,
@@ -130,7 +174,7 @@ class ConfigurationRepositoryImpl(
         val body = buildString {
             append(description)
             append("\n\n---\n")
-            append("Submitted from Exvia 1.13.5\n")
+            append("Submitted from Exvia 1.13.6\n")
             append("Classification: $classification ($label)\n")
             append("Data repository: ${settings.owner}/${settings.repo}\n")
             append("Branch: ${settings.branch}\n")

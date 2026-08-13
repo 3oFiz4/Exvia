@@ -35,6 +35,16 @@ object TableStyleEngine {
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
     )
 
+    /**
+     * Compact alternative used by v1.13.6+: `table.PRICE.fore = "#fff"`.
+     * `table.fore = ...` targets the matching row itself. Legacy MATCHING_ROW
+     * syntax remains fully supported for existing synchronized rules.
+     */
+    private val compactAssignmentRegex = Regex(
+        """table\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*))?\s*\.\s*(back|fore|content)\s*=\s*(['\"])(.*?)\3\s*;?""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+    )
+
     fun resolve(data: TableData, rules: List<TableStyleRule>): TableStyleResult {
         if (data.rows.isEmpty() || rules.none { it.enabled }) return TableStyleResult()
         val result = linkedMapOf<Int, MutableRowStyle>()
@@ -75,6 +85,20 @@ object TableStyleEngine {
             )
         }.toList()
         if (matches.isNotEmpty()) return matches
+
+        val compact = compactAssignmentRegex.findAll(text).map { match ->
+            val first = match.groupValues[1].trim()
+            val property = match.groupValues[2].lowercase()
+            // `table.fore` has no column. With the regex above it is captured as
+            // first=fore only when no final property exists, so valid matches here
+            // are either table.COLUMN.property or table.property.
+            Assignment(
+                column = first.takeIf { it.isNotBlank() && !it.equals(property, true) },
+                property = property,
+                value = unescape(match.groupValues[4]),
+            )
+        }.toList()
+        if (compact.isNotEmpty()) return compact
 
         // A plain value is useful in the editor: a color applies to the row;
         // plain content applies to the full row as an inherited cell template.

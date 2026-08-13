@@ -15,6 +15,79 @@
     selection:'#59C2FF', tooltipBackground:'#11151C', tooltipText:'#EDEDED', tooltipBorder:'#F72323'
   });
 
+
+  // Exvia ENV is an application-scoped JavaScript environment, not an OS/.env file.
+  // Each variable exposes explicit CRUD-style methods: ENV.foo.get/post/put/delete.
+  function createEnvironment(payload) {
+    const definitions = payload?.environment && typeof payload.environment === 'object' ? payload.environment : {};
+    const state = {};
+    const clone = value => {
+      try { return JSON.parse(JSON.stringify(value)); } catch (_) { return value; }
+    };
+    const parsePath = path => Array.isArray(path) ? path.map(String) : String(path ?? '').split('.').filter(Boolean);
+    const getAt = (rootValue, path) => {
+      const parts = parsePath(path); let cur = rootValue;
+      for (const part of parts) { if (cur == null || typeof cur !== 'object') return undefined; cur = cur[part]; }
+      return cur;
+    };
+    const setAt = (rootValue, path, value) => {
+      const parts = parsePath(path); if (!parts.length) return clone(value);
+      let base = rootValue && typeof rootValue === 'object' ? clone(rootValue) : {};
+      let cur = base;
+      parts.slice(0,-1).forEach(part => { if (!cur[part] || typeof cur[part] !== 'object') cur[part] = {}; cur = cur[part]; });
+      cur[parts[parts.length-1]] = clone(value); return base;
+    };
+    const deleteAt = (rootValue, path) => {
+      const parts = parsePath(path); if (!parts.length) return null;
+      if (!rootValue || typeof rootValue !== 'object') return rootValue;
+      const base = clone(rootValue); let cur = base;
+      for (const part of parts.slice(0,-1)) { if (!cur?.[part] || typeof cur[part] !== 'object') return base; cur = cur[part]; }
+      delete cur[parts[parts.length-1]]; return base;
+    };
+    const mergePost = (current, value) => {
+      if (Array.isArray(current)) { const out = current.slice(); Array.isArray(value) ? out.push(...clone(value)) : out.push(clone(value)); return out; }
+      if (current && typeof current === 'object' && value && typeof value === 'object' && !Array.isArray(value)) return {...clone(current), ...clone(value)};
+      if (current == null) return clone(value);
+      return [clone(current), clone(value)];
+    };
+    Object.entries(definitions).forEach(([name, definition]) => {
+      let value = null;
+      const encoded = definition?.valueJson;
+      if (typeof encoded === 'string' && encoded.trim() && encoded.trim() !== 'null') {
+        try { value = JSON.parse(encoded); } catch (_) { value = encoded; }
+      } else if (definition?.value !== undefined) value = clone(definition.value);
+      if (value == null) {
+        const script = String(definition?.script || definition?.initializerScript || 'return null;');
+        try { value = new Function('"use strict";\n' + script)(); } catch (_) { value = null; }
+      }
+      state[name] = clone(value);
+    });
+    const apiFor = name => Object.freeze({
+      get(path) { return clone(arguments.length ? getAt(state[name], path) : state[name]); },
+      put(pathOrValue, value) {
+        state[name] = arguments.length === 1 ? clone(pathOrValue) : setAt(state[name], pathOrValue, value);
+        return clone(state[name]);
+      },
+      post(pathOrValue, value) {
+        if (arguments.length === 1) state[name] = mergePost(state[name], pathOrValue);
+        else state[name] = setAt(state[name], pathOrValue, mergePost(getAt(state[name], pathOrValue), value));
+        return clone(state[name]);
+      },
+      delete(path) { state[name] = arguments.length ? deleteAt(state[name], path) : null; return clone(state[name]); }
+    });
+    const ENV = new Proxy({}, {
+      get(_target, prop) {
+        if (prop === '__snapshot') return () => clone(state);
+        if (typeof prop !== 'string') return undefined;
+        if (!(prop in state)) state[prop] = null;
+        return apiFor(prop);
+      },
+      ownKeys() { return Reflect.ownKeys(state); },
+      getOwnPropertyDescriptor() { return {enumerable:true, configurable:true}; }
+    });
+    return {ENV, snapshot:() => clone(state)};
+  }
+
   const helpers = Object.freeze({
     number(value) {
       if (value === null || value === undefined) return NaN;
@@ -735,8 +808,10 @@
       engine:payload.engine || 'auto',
       theme, jsonFile, helpers
     };
-    const fn = new Function('context','jsonFile','d3','Plot','aq','theme','helpers',`"use strict";\n${payload.script}\n`);
-    const result = fn(context,jsonFile,d3,Plot,aq,theme,helpers);
+    const envRuntime = createEnvironment(payload);
+    const fn = new Function('context','jsonFile','d3','Plot','aq','theme','helpers','ENV',`"use strict";\n${payload.script}\n`);
+    const result = fn(context,jsonFile,d3,Plot,aq,theme,helpers,envRuntime.ENV);
+    payload.__envSnapshot = envRuntime.snapshot();
     if (result && typeof result.then === 'function') throw new Error('Async custom plots are not supported; return synchronously.');
     if (result instanceof Node) root.appendChild(result);
     else if (result && typeof result.node === 'function' && result.node() instanceof Node) root.appendChild(result.node());
@@ -773,7 +848,7 @@
       else throw new Error(`Unknown plot kind: ${payload.kind}`);
       lastRootWidth = root.clientWidth;
       lastRootHeight = root.clientHeight;
-      return JSON.stringify({ok:true});
+      return JSON.stringify({ok:true,env:payload.__envSnapshot || createEnvironment(payload).snapshot()});
     } catch (e) {
       error(e?.stack || e?.message || String(e), theme);
       return JSON.stringify({ok:false,error:String(e?.message || e)});
@@ -785,15 +860,17 @@
   function evaluateMetric(payload) {
     const theme = themeOf(payload);
     try {
-      if (typeof d3 === 'undefined' || typeof Plot === 'undefined' || typeof aq === 'undefined') {
-        throw new Error('D3, Observable Plot, or Arquero is not ready.');
-      }
+      const d3Module = typeof d3 !== 'undefined' ? d3 : undefined;
+      const plotModule = typeof Plot !== 'undefined' ? Plot : undefined;
+      const arqueroModule = typeof aq !== 'undefined' ? aq : undefined;
       const jsonFile = Object.freeze(payload.jsonFile || {name:'current.json',content:'[]'});
-      const context = Object.freeze({theme,jsonFile,helpers});
-      const fn = new Function('context','jsonFile','d3','Plot','aq','theme','helpers',`"use strict";\n${payload.script}\n`);
-      const value = fn(context,jsonFile,d3,Plot,aq,theme,helpers);
+      const envRuntime = createEnvironment(payload);
+      const inputs = Object.freeze(payload.inputs || {});
+      const context = Object.freeze({theme,jsonFile,helpers,inputs});
+      const fn = new Function('context','jsonFile','d3','Plot','aq','theme','helpers','ENV',`"use strict";\n${payload.script}\n`);
+      const value = fn(context,jsonFile,d3Module,plotModule,arqueroModule,theme,helpers,envRuntime.ENV);
       if (value && typeof value.then === 'function') throw new Error('Async custom metrics are not supported; return synchronously.');
-      return JSON.stringify({ok:true,value:value === undefined ? null : value});
+      return JSON.stringify({ok:true,value:value === undefined ? null : value,env:envRuntime.snapshot()});
     } catch (e) {
       return JSON.stringify({ok:false,error:String(e?.message || e)});
     }
@@ -811,6 +888,7 @@
       const rows = Array.isArray(payload.rows) ? payload.rows : [];
       const jsonFile = Object.freeze(payload.jsonFile || {name:'current.json',content:JSON.stringify(rows)});
       const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+      const envRuntime = createEnvironment(payload);
       const results = tasks.map((task, taskIndex) => {
         try {
           const index = Number.isFinite(Number(task.index)) ? Number(task.index) : taskIndex;
@@ -819,18 +897,88 @@
           const field = String(task.field || '');
           const body = String(task.body || "return '';" );
           const context = Object.freeze({theme,jsonFile,helpers,row,table,field,index});
-          const fn = new Function('row','table','field','index','context','jsonFile','d3','Plot','aq','theme','helpers',`"use strict";\n${body}\n`);
-          const value = fn(row,table,field,index,context,jsonFile,d3Module,plotModule,arqueroModule,theme,helpers);
+          const fn = new Function('row','table','field','index','context','jsonFile','d3','Plot','aq','theme','helpers','ENV',`"use strict";\n${body}\n`);
+          const value = fn(row,table,field,index,context,jsonFile,d3Module,plotModule,arqueroModule,theme,helpers,envRuntime.ENV);
           if (value && typeof value.then === 'function') throw new Error('Async field formulas are not supported; return synchronously.');
           return {id:String(task.id ?? taskIndex), ok:true, value:value === undefined || value === null ? '' : value};
         } catch (error) {
           return {id:String(task.id ?? taskIndex), ok:false, error:String(error?.message || error)};
         }
       });
-      return JSON.stringify({ok:true,results});
+      return JSON.stringify({ok:true,results,env:envRuntime.snapshot()});
     } catch (e) {
       return JSON.stringify({ok:false,error:String(e?.message || e),results:[]});
     }
+  }
+
+
+  function metricLookup(payload) {
+    const metrics = payload?.metrics && typeof payload.metrics === 'object' ? payload.metrics : {};
+    return name => {
+      const target = String(name ?? '').toLowerCase();
+      const key = Object.keys(metrics).find(k => k.toLowerCase() === target);
+      return key ? metrics[key] : null;
+    };
+  }
+
+  function evaluateNotification(payload) {
+    const theme = themeOf(payload); const envRuntime = createEnvironment(payload);
+    try {
+      const jsonFile = Object.freeze(payload.jsonFile || {name:'current.json',content:'[]'});
+      const event = Object.freeze(payload.event || {}); const metric = metricLookup(payload);
+      const context = Object.freeze({theme,jsonFile,helpers,event,metric});
+      const fn = new Function('context','event','metric','jsonFile','d3','Plot','aq','theme','helpers','ENV',`"use strict";\n${payload.script}\n`);
+      const value = fn(context,event,metric,jsonFile,typeof d3==='undefined'?undefined:d3,typeof Plot==='undefined'?undefined:Plot,typeof aq==='undefined'?undefined:aq,theme,helpers,envRuntime.ENV);
+      if (value && typeof value.then === 'function') throw new Error('Async notification scripts are not supported.');
+      return JSON.stringify({ok:true,value:value ?? null,env:envRuntime.snapshot()});
+    } catch (e) { return JSON.stringify({ok:false,error:String(e?.message||e),env:envRuntime.snapshot()}); }
+  }
+
+  function evaluateSchemaBatch(payload) {
+    const theme = themeOf(payload); const envRuntime = createEnvironment(payload);
+    try {
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      const rules = Array.isArray(payload.rules) ? payload.rules : [];
+      const keys = Array.isArray(payload.keys) ? payload.keys : [];
+      const results = keys.map(key => {
+        let config = {};
+        for (const rule of rules) {
+          if (rule?.enabled === false || !rule?.script) continue;
+          const context = Object.freeze({key, rows, table:rows, current:Object.freeze({...config}), theme, helpers});
+          const fn = new Function('key','rows','table','current','context','theme','helpers','ENV',`"use strict";\n${rule.script}\n`);
+          const out = fn(key,rows,rows,context.current,context,theme,helpers,envRuntime.ENV);
+          if (out && typeof out === 'object' && !Array.isArray(out)) config = {...config,...out};
+        }
+        return {key,config};
+      });
+      return JSON.stringify({ok:true,results,env:envRuntime.snapshot()});
+    } catch(e) { return JSON.stringify({ok:false,error:String(e?.message||e),results:[],env:envRuntime.snapshot()}); }
+  }
+
+  function evaluateMetricColorBatch(payload) {
+    const theme = themeOf(payload); const envRuntime = createEnvironment(payload);
+    try {
+      const rules = Array.isArray(payload.rules) ? payload.rules : [];
+      const metrics = Array.isArray(payload.metricItems) ? payload.metricItems : [];
+      const metricByName = name => {
+        const target = String(name ?? '').toLowerCase();
+        const found = metrics.find(item => String(item?.name ?? '').toLowerCase() === target);
+        return found ? found.value : null;
+      };
+      const results = metrics.map(metricItem => {
+        let color = {};
+        for (const rule of rules) {
+          if (rule?.enabled === false || !rule?.script) continue;
+          const wanted = String(rule.metricName || '*').toLowerCase();
+          if (wanted !== '*' && wanted !== String(metricItem.name||'').toLowerCase()) continue;
+          const fn = new Function('metric','theme','helpers','ENV','metrics',`"use strict";\n${rule.script}\n`);
+          const out = fn(Object.freeze(metricItem),theme,helpers,envRuntime.ENV,metricByName);
+          if (out && typeof out === 'object' && !Array.isArray(out)) color = {...color,...out};
+        }
+        return {name:metricItem.name,key:color.key||null,value:color.value||null};
+      });
+      return JSON.stringify({ok:true,results,env:envRuntime.snapshot()});
+    } catch(e) { return JSON.stringify({ok:false,error:String(e?.message||e),results:[],env:envRuntime.snapshot()}); }
   }
 
   function resize() {
@@ -855,6 +1003,9 @@
     resize,
     evaluateMetric,
     evaluateFormulaBatch,
+    evaluateNotification,
+    evaluateSchemaBatch,
+    evaluateMetricColorBatch,
     helpers,
     versions:() => ({d3:d3?.version || '7', plot:'0.6.17', arquero:'8.0.3'})
   });

@@ -4,6 +4,7 @@ package xyz.x3ofiz4.exvia.app
 import android.content.Context
 import xyz.x3ofiz4.exvia.data.local.ExviaFileCache
 import xyz.x3ofiz4.exvia.data.local.SelectedFileStore
+import xyz.x3ofiz4.exvia.data.local.LocalStagingStore
 import xyz.x3ofiz4.exvia.data.local.SettingsStore
 import xyz.x3ofiz4.exvia.data.local.TokenStore
 import xyz.x3ofiz4.exvia.data.repository.ConfigurationRepositoryImpl
@@ -19,11 +20,13 @@ class ExviaContainer(context: Context) {
     val settingsStore = SettingsStore(appContext)
     val fileCache = ExviaFileCache(appContext)
     val selectedFileStore = SelectedFileStore(appContext)
+    val stagingStore = LocalStagingStore(appContext)
 
     val expenseRepository: ExpenseRepository = GitHubExpenseRepository(
         tokenStore = tokenStore,
         cache = fileCache,
         selectedFileStore = selectedFileStore,
+        stagingStore = stagingStore,
     )
 
     val configurationRepository: ConfigurationRepository = ConfigurationRepositoryImpl(
