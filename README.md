@@ -14,6 +14,11 @@ This is intentional, because this app are made to respect the user's privacy. Me
 
 https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 
+<details>
+  <summary>File structure</summary>
+  <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/163ce797-d0a1-4404-9b9e-ee7dbee643c0" />
+</details>
+
 # Installation
 
 1. Create your own GitHub repository, and ensure it is private, and your GitHub PAT is initialized
