@@ -48,24 +48,29 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 2. Built-in Filtering via SQLite syntax (e.g., SELECT \* WHERE ...)
 3. No managed databases, the app is not controlled by the author. You create your own, you manage it.
 4. Automatic and smart synchronization between application with database
-5. Configurable color for table's value
-6. Extensive configuration, this includes GitHub as Database, Color, Scheme & Display, Custom metric, and Custom plot
-7. Built-in Tutorial for first-time installation
-8. Extensive statistical and financial metric, you can add your own if you want to.
-9. Multi-file access and synchronization
-10. Distinguishable logo and name
-11. Beautiful font family
-12. Explanation for each input and text, hold for 3 seconds to show tooltip
-13. Developer Options (click 3x to the Title "Exvia" on Table to toggle)
-14. Extended customization of plot, uses D3.JS (for complex plot) and ObservablePlot (for simpler plot), you can make your own! (If you are not familiar with programming, please use AI)
-15. Report button, so you do not have create Issue on GitHub anymore :).
-16. Resizeable UI and Text
-17. Pagination within Table (Buttons are intuitive, you can also click on the `Page i / n` to input a specific `i` page.
-18. Flagging option (hold click at `Filtering OFF/ON` button for two seconds, and hold click at the Flagging Input to see available snippets)
-19. Customizable color mapping (function are similar to flagging, but automatically activate at initial load)
-20. Revert/Undo and Redo option if mistake happened
-21. Field and Imaginary Field with JS and SQLite syntax support, imitating Excel-like formula
-22. File scripting using SQLite syntax
+5. AI Assistant
+6. Configurable color for table's value
+7. Extensive configuration, this includes GitHub as Database, Color, Scheme & Display, Custom metric, and Custom plot
+8. Built-in Tutorial for first-time installation
+9. Extensive statistical and financial metric, you can add your own if you want to.
+10. Multi-file access and synchronization
+11. Distinguishable logo and name
+12. Beautiful font family
+13. Explanation for each input and text, hold for 3 seconds to show tooltip
+14. Developer Options (click 3x to the Title "Exvia" on Table to toggle)
+15. Extended customization of plot, uses D3.JS (for complex plot) and ObservablePlot (for simpler plot), you can make your own! (If you are not familiar with programming, please use AI)
+16. Report button, so you do not have create Issue on GitHub anymore :).
+17. Resizeable UI and Text
+18. Pagination within Table (Buttons are intuitive, you can also click on the `Page i / n` to input a specific `i` page.
+19. Flagging option (hold click at `Filtering OFF/ON` button for two seconds, and hold click at the Flagging Input to see available snippets)
+20. Customizable color mapping (function are similar to flagging, but automatically activate at initial load)
+21. Revert/Undo and Redo option if mistake happened
+22. Field and Imaginary Field with JS and SQLite syntax support, imitating Excel-like formula
+23. File scripting using SQLite syntax
+24. Notification system
+25. Environment Variable
+26. Custom key schema
+27. Icons 
 
 # To-Do (next release)
 
@@ -90,7 +95,7 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
   </pre>
 </details>
 
-- [ ] Add "AI Assistant" for interpretation, creation of custom metric, plot, filtering & flagging snippets, or just for chatting `(R+2)`
+- [x] Add "AI Assistant" for interpretation, creation of custom metric, plot, filtering & flagging snippets, or just for chatting `(R+2)`
 
 <details>
   <summary>
@@ -139,8 +144,8 @@ API_KEY, BASE_URL, MODEL
 </details>
 
 - [ ] Automatic Schema Reconcilation via Receipt & Document OCR. A image scanner feature to scan image whether at real-time or assuming there is a given folder, parse the image and apply the operation to the database directly. This is useful, especially when most of your transactions relied on digital banking app, so you do not have to type anymore, but instead the app will do it's job. `(R+3)`
-- [ ] Forecasting (ARIMA, SARIMA, MA, SMA), (still in consideration if using XGB, LGBM, or even CB is a applicable in here without sacrificing memory and app size) `(R+2)`
-- [ ] Push notifications upon Amending for any instance of warning. For example, let's say I bought Ice Cream for 50 bucks, and my daily budget is 30 bucks, there will be a push notification that warns me about it. `(R+2)`
+- [ ] ~~Forecasting (ARIMA, SARIMA, MA, SMA), (still in consideration if using XGB, LGBM, or even CB is a applicable in here without sacrificing memory and app size) `(R+2)`~~
+- [x] Push notifications upon Amending for any instance of warning. For example, let's say I bought Ice Cream for 50 bucks, and my daily budget is 30 bucks, there will be a push notification that warns me about it. `(R+2)`
 - [ ] Export report as Document or .pdf. This will also include the plotting. `(R+3)`
 - [ ] Minimal, Lightweight, and Accurate voice recognition model that can be triggered by saying the word "Fin", and will listen for any word uttered by the user, and amending what is spoken to the database at a time `(R+4)`
 - [ ] Add an extended finance for Investment, Debt, and more. (By theory, you could imitate this in the app right now, without having this feature amended for next release. By categorizing your specific data, say INV (for Investment), create the field necessary, such as Future Value (FV), you could create a custom metric that calculates them) `(R+5)`
