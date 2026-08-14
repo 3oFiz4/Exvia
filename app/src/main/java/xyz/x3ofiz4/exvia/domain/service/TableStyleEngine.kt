@@ -30,6 +30,9 @@ data class TableStyleResult(
 object TableStyleEngine {
     private data class Assignment(val column: String?, val property: String, val value: String)
 
+    /** Compiled once; the literal closing brace must be escaped on every regex engine. */
+    private val templateExpressionRegex = Regex("""\$\{([^}]+)\}""")
+
     private val assignmentRegex = Regex(
         """table\s*\[\s*(['\"])MATCHING_ROW\1\s*]\s*(?:\[\s*(['\"])([^'\"]+)\2\s*])?\s*\.\s*(back|fore|content)\s*=\s*(['\"])(.*?)\5\s*;?""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
@@ -122,7 +125,7 @@ object TableStyleEngine {
 
     private fun interpolate(template: String, row: DynamicRow, currentValue: String = ""): String {
         var result = template.replace("${'$'}value", currentValue)
-        Regex("""\$\{([^}]+)}""").findAll(result).toList().asReversed().forEach { match ->
+        templateExpressionRegex.findAll(result).toList().asReversed().forEach { match ->
             val key = match.groupValues[1]
             val value = row.values.entries.firstOrNull { it.key.equals(key, true) }?.value.orEmpty()
             result = result.replaceRange(match.range, value)

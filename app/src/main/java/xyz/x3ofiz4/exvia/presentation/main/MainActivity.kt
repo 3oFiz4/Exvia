@@ -7,6 +7,7 @@ import xyz.x3ofiz4.exvia.domain.model.settings.*
 import xyz.x3ofiz4.exvia.domain.model.table.*
 import xyz.x3ofiz4.exvia.domain.model.theme.*
 import xyz.x3ofiz4.exvia.domain.service.BuiltinExamples
+import xyz.x3ofiz4.exvia.domain.service.AssistantEndpointResolver
 import xyz.x3ofiz4.exvia.domain.service.Statistics
 import xyz.x3ofiz4.exvia.domain.service.TableStyleResult
 import xyz.x3ofiz4.exvia.presentation.common.*
@@ -18,10 +19,19 @@ import xyz.x3ofiz4.exvia.app.ExviaApplication
 import xyz.x3ofiz4.exvia.app.ExviaContainer
 import xyz.x3ofiz4.exvia.presentation.statistics.StatisticsViewModel
 import xyz.x3ofiz4.exvia.presentation.notification.NotificationDispatcher
+import xyz.x3ofiz4.exvia.data.local.AssistantStore
+import xyz.x3ofiz4.exvia.data.remote.AssistantApi
+import xyz.x3ofiz4.exvia.data.remote.AssistantAttachment
+import xyz.x3ofiz4.exvia.data.remote.AssistantMessage
+import xyz.x3ofiz4.exvia.data.remote.AssistantToolExecutor
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.animation.ObjectAnimator
+import android.content.Intent
+import android.net.Uri
 import android.content.res.ColorStateList
+import android.database.Cursor
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -33,6 +43,8 @@ import android.os.SystemClock
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
+import android.provider.OpenableColumns
+import android.util.Base64
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -64,13 +76,20 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class MainActivity : Activity() {
     companion object {
         private val GREEN = Color.rgb(52, 199, 89)
+        private const val ASSISTANT_FILE_REQUEST = 7401
+        private const val ASSISTANT_MAX_FILE_BYTES = 10 * 1024 * 1024
+        private const val ASSISTANT_MAX_ATTACHMENTS = 5
     }
 
-    private enum class Tab { TABLE, STAT, FILES }
+    private enum class Tab { TABLE, STAT, FILES, ASSISTANT }
     private data class ThemeChoice(val id: String, val label: String)
     private data class CustomStatNode(
         val name: String,
@@ -122,6 +141,12 @@ class MainActivity : Activity() {
     private lateinit var statScreen: ScrollView
     private lateinit var statContent: LinearLayout
     private lateinit var filesScreen: LinearLayout
+    private lateinit var assistantScreen: LinearLayout
+    private lateinit var assistantMessages: LinearLayout
+    private lateinit var assistantScroll: ScrollView
+    private lateinit var assistantInput: EditText
+    private lateinit var assistantContextText: TextView
+    private lateinit var assistantAttachmentText: TextView
     private lateinit var dynamicForm: LinearLayout
     private lateinit var tableEntryControls: LinearLayout
     private lateinit var tableControlsToggle: Button
@@ -139,6 +164,7 @@ class MainActivity : Activity() {
     private lateinit var tableTabButton: Button
     private lateinit var statTabButton: Button
     private lateinit var filesTabButton: Button
+    private lateinit var assistantTabButton: Button
     private lateinit var resyncButton: TextView
     private lateinit var gitButton: TextView
     private lateinit var titleText: TextView
@@ -160,6 +186,10 @@ class MainActivity : Activity() {
     private lateinit var tickerKeySetting: EditText
     private lateinit var tagsKeySetting: EditText
     private lateinit var tokenSetting: EditText
+    private lateinit var assistantBaseUrlSetting: EditText
+    private lateinit var assistantApiKeySetting: EditText
+    private lateinit var assistantModelSetting: EditText
+    private lateinit var assistantUsageText: TextView
     private lateinit var themeSpinner: Spinner
     private lateinit var plotThemeSpinner: Spinner
     private lateinit var primarySetting: EditText
@@ -249,6 +279,13 @@ class MainActivity : Activity() {
     private var metricColorSignature = ""
     private var lastEnvironmentSnapshot = ""
     private var environmentSaveRunnable: Runnable? = null
+    private val assistantApi = AssistantApi()
+    private val assistantExecutor = Executors.newSingleThreadExecutor()
+    private val assistantHistory = mutableListOf<AssistantMessage>()
+    private val pendingAssistantAttachments = mutableListOf<AssistantAttachment>()
+    private var assistantBusy = false
+    private var assistantContextTokens = 0
+    private var appInForeground = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -314,11 +351,22 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        appInForeground = true
+    }
+
+    override fun onStop() {
+        appInForeground = false
+        super.onStop()
+    }
+
     override fun onDestroy() {
         subscriptions.forEach { runCatching { it.close() } }
         mainViewModel.close()
         settingsViewModel.close()
         plotRuntime.destroy()
+        assistantExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -550,18 +598,29 @@ class MainActivity : Activity() {
         tableScreen = buildTableScreen()
         statScreen = buildStatScreen().apply { visibility = View.GONE }
         filesScreen = buildFilesScreen().apply { visibility = View.GONE }
+        assistantScreen = buildAssistantScreen().apply { visibility = View.GONE }
         contentHost.addView(tableScreen, frameMatch())
         contentHost.addView(statScreen, frameMatch())
         contentHost.addView(filesScreen, frameMatch())
+        contentHost.addView(assistantScreen, frameMatch())
         content.addView(contentHost, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         tableTabButton = styledButton("Table").apply { setOnClickListener { showTab(Tab.TABLE) } }
         statTabButton = styledButton("Stat").apply { setOnClickListener { showTab(Tab.STAT) } }
         filesTabButton = styledButton("Files").apply { setOnClickListener { showTab(Tab.FILES) } }
+        if (container.assistantStore.isConfigured()) {
+            assistantTabButton = styledButton("Assistant").apply {
+                applyActionIcon(this, "Assistant", "assistant.png")
+                setOnClickListener { showTab(Tab.ASSISTANT) }
+            }
+        }
         tabs.addView(tableTabButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(2) })
         tabs.addView(statTabButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(2) })
         tabs.addView(filesTabButton, LinearLayout.LayoutParams(0, dp(40), 1f))
+        if (::assistantTabButton.isInitialized) {
+            tabs.addView(assistantTabButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(2) })
+        }
         content.addView(tabs, matchWidth())
         drawerRoot.addView(content, frameMatch())
 
@@ -805,6 +864,866 @@ class MainActivity : Activity() {
         addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
     }
 
+    private fun buildAssistantScreen(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setBackgroundColor(BLACK)
+
+        assistantAttachmentText = infoText("").apply {
+            visibility = View.GONE
+            setTextColor(MUTED)
+            textSize = 10f
+            maxLines = 2
+        }
+        addView(assistantAttachmentText, matchWidth())
+
+        assistantContextText = infoText("").apply {
+            setTextColor(MUTED)
+            textSize = 9.5f
+            setPadding(dp(3), dp(2), dp(3), dp(4))
+        }
+        addView(assistantContextText, matchWidth())
+
+        assistantMessages = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(3), 0, dp(8))
+            setBackgroundColor(BLACK)
+        }
+        assistantScroll = ScrollView(this@MainActivity).apply {
+            setBackgroundColor(BLACK)
+            addView(assistantMessages, matchWidth())
+            var downY = 0f
+            var resetTriggered = false
+            setOnTouchListener { _, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downY = event.y
+                        resetTriggered = false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (!resetTriggered && scrollY == 0 && downY <= dp(52) && event.y - downY >= dp(120)) {
+                            resetTriggered = true
+                            resetAssistantChat()
+                        }
+                    }
+                }
+                false
+            }
+        }
+        addView(assistantScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val composer = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.BOTTOM
+            setPadding(0, dp(5), 0, 0)
+        }
+        val infoButton = assistantIconButton("Assistant information", "info.png", "!").apply {
+            setOnClickListener { showAssistantInfo() }
+        }
+        val addButton = assistantIconButton("Add file", "add_file.png", "+").apply {
+            setOnClickListener { chooseAssistantFiles() }
+        }
+        assistantInput = styledInput("Message or /stat, /stat.price, /head").apply {
+            isSingleLine = false
+            minLines = 2
+            maxLines = 6
+            gravity = Gravity.TOP or Gravity.START
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            imeOptions = EditorInfo.IME_FLAG_NO_ENTER_ACTION
+        }
+        val sendButton = assistantIconButton("Send message", "send.png", "->").apply {
+            setOnClickListener { sendAssistantMessage() }
+        }
+        composer.addView(infoButton, LinearLayout.LayoutParams(dp(48), dp(52)).apply { marginEnd = dp(3) })
+        composer.addView(addButton, LinearLayout.LayoutParams(dp(48), dp(52)).apply { marginEnd = dp(4) })
+        composer.addView(assistantInput, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(4) })
+        composer.addView(sendButton, LinearLayout.LayoutParams(dp(52), dp(52)))
+        addView(composer, matchWidth())
+
+        appendAssistantBubble("Assistant", "Ask about the current table, statistics, or scripts. I will request approval before persistent app changes.")
+        updateAssistantUsageLabels()
+    }
+
+    private fun assistantIconButton(description: String, assetName: String, fallback: String): TextView = TextView(this).apply {
+        gravity = Gravity.CENTER
+        background = inactiveActionBackground(PRIMARY)
+        setTextColor(PRIMARY)
+        val iconLoaded = UiIconSupport.apply(
+            view = this,
+            label = description,
+            mode = UiIconMode.ICON_ONLY,
+            primary = PRIMARY,
+            iconSizePx = dp(28),
+            drawablePaddingPx = 0,
+            assetName = assetName,
+        )
+        if (!iconLoaded) {
+            setCompoundDrawables(null, null, null, null)
+            text = fallback
+            textSize = 20f
+            AppFonts.apply(this, bold = true, textScale = settings.textScale)
+        }
+    }
+
+    private fun appendAssistantBubble(
+        role: String,
+        message: String,
+        reasoningSummary: String = "",
+        reasoningTokens: Int = 0,
+    ) {
+        if (!::assistantMessages.isInitialized) return
+        val assistant = role.equals("Assistant", true)
+        val roleName = when {
+            role.equals("You", true) || role.equals("User", true) -> "User"
+            role.equals("System", true) -> "System"
+            else -> "Assistant"
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = activeButtonBackground(if (assistant) SECONDARY else PRIMARY)
+        }
+        card.addView(TextView(this).apply {
+            text = "# $roleName"
+            setTextColor(PRIMARY)
+            textSize = 12f
+            AppFonts.apply(this, bold = true, textScale = settings.textScale)
+        }, matchWidth())
+
+        if (reasoningSummary.isNotBlank() || reasoningTokens > 0) {
+            val summary = reasoningSummary.ifBlank {
+                "The provider used $reasoningTokens reasoning tokens. Raw reasoning is private; only provider-supplied summaries are shown."
+            }
+            val details = TextView(this).apply {
+                text = MarkdownFormatter.render(summary)
+                setTextColor(MUTED)
+                textSize = 9.5f
+                setPadding(dp(5), dp(3), dp(5), dp(5))
+                visibility = View.GONE
+                AppFonts.apply(this, textScale = settings.textScale)
+            }
+            val thinkingHeader = TextView(this).apply {
+                text = "▸ Thinking${if (reasoningTokens > 0) " · $reasoningTokens tokens" else ""}"
+                setTextColor(MUTED)
+                textSize = 9.5f
+                setPadding(0, dp(4), 0, dp(3))
+                AppFonts.apply(this, bold = true, textScale = settings.textScale)
+                setOnClickListener {
+                    val open = details.visibility != View.VISIBLE
+                    details.visibility = if (open) View.VISIBLE else View.GONE
+                    text = "${if (open) "▾" else "▸"} Thinking${if (reasoningTokens > 0) " · $reasoningTokens tokens" else ""}"
+                }
+            }
+            card.addView(thinkingHeader, matchWidth())
+            card.addView(details, matchWidth())
+        }
+
+        card.addView(TextView(this).apply {
+            text = MarkdownFormatter.render(message)
+            setTextColor(WHITE)
+            textSize = 13f
+            setPadding(0, dp(4), 0, 0)
+            AppFonts.apply(this, textScale = settings.textScale)
+        }, matchWidth())
+
+        assistantMessages.addView(card, LinearLayout.LayoutParams(
+            (resources.displayMetrics.widthPixels * 0.82f).toInt(),
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply {
+            gravity = if (assistant) Gravity.START else Gravity.END
+            topMargin = dp(5)
+        })
+        assistantScroll.post { assistantScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun resetAssistantChat() {
+        assistantHistory.clear()
+        pendingAssistantAttachments.clear()
+        assistantContextTokens = 0
+        assistantMessages.removeAllViews()
+        assistantInput.text.clear()
+        appendAssistantBubble("Assistant", "Chat reset. What would you like to do?")
+        updateAssistantUsageLabels()
+        Toast.makeText(this, "Assistant chat reset.", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showAssistantInfo() {
+        AlertDialog.Builder(this)
+            .setTitle("Exvia Assistant")
+            .setMessage(
+                "The configured provider receives your messages and attached files. /head adds the first 10 visible table rows; /stat, /stats, and /statistics add the full visible report; /stat.<accordion> narrows it.\n\n" +
+                    "The assistant can inspect Exvia, navigate, set a temporary query, and propose changes to snippets, mappings, metrics, plots, and scripts. Persistent changes always require your approval.\n\n" +
+                    "Chat messages render Markdown. Role headings use Primary. When the provider reports reasoning usage, Exvia shows a small collapsed gray Thinking panel; raw private reasoning is never exposed. If you leave Exvia while a request is running, Android notifies you when it finishes.\n\n" +
+                    "New snippet, mapping, field, schema, automation, plot, and metric editors include an AI generator. It sends that feature's runtime guide and complete built-in example set, then creates the generated item through the editor's normal save path.\n\n" +
+                    "Exvia automatically uses Responses for OpenAI/OpenRouter and Chat Completions for Gemini or other compatible providers. Images work with both modes; arbitrary binary file input depends on provider support.\n\n" +
+                    "API keys are encrypted locally with Android Keystore and are never included in prompts or synchronized configuration. Pull down from the top of this chat to reset it. Files are limited to 10 MB each and five per message."
+            )
+            .setPositiveButton("Close", null)
+            .create().also { showDialog(it) }
+    }
+
+    private fun chooseAssistantFiles() {
+        if (pendingAssistantAttachments.size >= ASSISTANT_MAX_ATTACHMENTS) {
+            Toast.makeText(this, "Remove or send the current attachments first.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        startActivityForResult(
+            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            },
+            ASSISTANT_FILE_REQUEST,
+        )
+    }
+
+    @Deprecated("Legacy Activity result is retained for this dependency-free Activity UI.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != ASSISTANT_FILE_REQUEST || resultCode != RESULT_OK || data == null) return
+        val uris = buildList {
+            data.clipData?.let { clip -> for (index in 0 until clip.itemCount) add(clip.getItemAt(index).uri) }
+            data.data?.let(::add)
+        }.distinct().take(ASSISTANT_MAX_ATTACHMENTS - pendingAssistantAttachments.size)
+        uris.forEach(::attachAssistantFile)
+        renderAssistantAttachments()
+    }
+
+    private fun attachAssistantFile(uri: Uri) {
+        val name = queryOpenableName(uri) ?: uri.lastPathSegment ?: "attachment"
+        val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
+        val bytes = runCatching { readAssistantAttachmentBytes(uri) }.getOrNull()
+        when {
+            bytes == null -> Toast.makeText(this, "Could not read $name.", Toast.LENGTH_LONG).show()
+            bytes.size > ASSISTANT_MAX_FILE_BYTES -> Toast.makeText(this, "$name is larger than 10 MB.", Toast.LENGTH_LONG).show()
+            else -> pendingAssistantAttachments += AssistantAttachment(
+                name = name,
+                mimeType = mimeType,
+                dataUrl = "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
+            )
+        }
+    }
+
+    private fun readAssistantAttachmentBytes(uri: Uri): ByteArray? =
+        contentResolver.openInputStream(uri)?.use { input ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8 * 1024)
+            var total = 0
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                total += count
+                if (total > ASSISTANT_MAX_FILE_BYTES) return@use ByteArray(ASSISTANT_MAX_FILE_BYTES + 1)
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray()
+        }
+
+    private fun queryOpenableName(uri: Uri): String? {
+        val cursor: Cursor = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null) ?: return null
+        return cursor.use {
+            if (!it.moveToFirst()) null else it.getString(it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
+        }
+    }
+
+    private fun renderAssistantAttachments() {
+        val names = pendingAssistantAttachments.joinToString(" · ") { it.name }
+        assistantAttachmentText.text = if (names.isBlank()) "" else "Attached: $names"
+        assistantAttachmentText.visibility = if (names.isBlank()) View.GONE else View.VISIBLE
+    }
+
+    private fun sendAssistantMessage() {
+        if (assistantBusy) return
+        val raw = assistantInput.text.toString().trim()
+        if (raw.isBlank() && pendingAssistantAttachments.isEmpty()) return
+        val configuration = container.assistantStore.loadConfiguration()
+        if (!configuration.isConfigured) {
+            Toast.makeText(this, "Complete BASE_URL, API_KEY, and MODEL in Settings.", Toast.LENGTH_LONG).show()
+            drawerRoot.openDrawer()
+            return
+        }
+        val expanded = expandAssistantSlashCommand(raw.ifBlank { "Please inspect the attached file(s)." })
+        val historySnapshot = assistantHistory.toList()
+        val attachments = pendingAssistantAttachments.toList()
+        pendingAssistantAttachments.clear()
+        renderAssistantAttachments()
+        assistantInput.text.clear()
+        appendAssistantBubble("You", raw.ifBlank { attachments.joinToString { it.name } })
+        setAssistantBusy(true)
+        notificationDispatcher.ensurePermission()
+        assistantExecutor.execute {
+            val result = runCatching {
+                assistantApi.complete(
+                    baseUrl = configuration.baseUrl,
+                    apiKey = configuration.apiKey,
+                    model = configuration.model,
+                    history = historySnapshot,
+                    message = expanded,
+                    attachments = attachments,
+                    toolExecutor = AssistantToolExecutor(::executeAssistantTool),
+                )
+            }
+            runOnUiThread {
+                setAssistantBusy(false)
+                result.fold(
+                    onSuccess = { reply ->
+                        assistantHistory += AssistantMessage("user", raw.ifBlank { "Attached file(s): ${attachments.joinToString { it.name }}" })
+                        assistantHistory += AssistantMessage("assistant", reply.text)
+                        assistantContextTokens = reply.inputTokens
+                        container.assistantStore.recordUsage(reply.totalTokens)
+                        appendAssistantBubble("Assistant", reply.text, reply.reasoningSummary, reply.reasoningTokens)
+                        updateAssistantUsageLabels()
+                        notifyAssistantIfBackground(reply.text)
+                    },
+                    onFailure = { error ->
+                        val failure = "Request failed: ${error.message ?: error.javaClass.simpleName}"
+                        appendAssistantBubble("Assistant", failure)
+                        notifyAssistantIfBackground(failure)
+                    },
+                )
+            }
+        }
+    }
+
+    private fun notifyAssistantIfBackground(message: String) {
+        if (appInForeground) return
+        val plain = message.replace(Regex("[`*_#>]"), "").replace(Regex("\\s+"), " ").trim()
+        notificationDispatcher.post(
+            title = "Exvia Assistant responded",
+            body = plain.take(500).ifBlank { "Your Assistant response is ready." },
+        )
+    }
+
+    private fun assistantCreationButton(
+        spec: AssistantCreationSpec,
+        onGenerated: (JSONObject) -> Unit,
+    ): Button = styledButton("AI").apply {
+        val loaded = UiIconSupport.apply(
+            view = this,
+            label = "AI",
+            mode = UiIconMode.ICON_ONLY,
+            primary = PRIMARY,
+            iconSizePx = dp(24),
+            drawablePaddingPx = 0,
+            assetName = "assisstant.png",
+        )
+        if (!loaded) text = "AI"
+        contentDescription = "Generate ${spec.title} with AI"
+        setOnClickListener { showAssistantCreationPrompt(spec, this, onGenerated) }
+    }
+
+    private fun showAssistantCreationPrompt(
+        spec: AssistantCreationSpec,
+        aiButton: Button,
+        onGenerated: (JSONObject) -> Unit,
+    ) {
+        val configuration = container.assistantStore.loadConfiguration()
+        if (!configuration.isConfigured) {
+            Toast.makeText(this, "Complete BASE_URL, API_KEY, and MODEL in Assistant settings first.", Toast.LENGTH_LONG).show()
+            drawerRoot.openDrawer()
+            return
+        }
+        val request = styledInput("Describe the ${spec.title} you want").apply {
+            isSingleLine = false
+            minLines = 5
+            maxLines = 12
+            gravity = Gravity.TOP or Gravity.START
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+            addView(infoText("The complete built-in example set and this editor's available runtime are added automatically.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(request, matchWidth())
+        }
+        val promptDialog = AlertDialog.Builder(this)
+            .setTitle("AI · ${spec.title}")
+            .setView(body)
+            .setNegativeButton("Back", null)
+            .setPositiveButton("Send", null)
+            .create()
+        promptDialog.setOnShowListener {
+            promptDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val userRequest = request.text.toString().trim()
+                if (userRequest.isBlank()) {
+                    request.error = "Describe what the AI should create"
+                    return@setOnClickListener
+                }
+                promptDialog.dismiss()
+                val loadingAnimation = startAiLoading(aiButton)
+                notificationDispatcher.ensurePermission()
+                assistantExecutor.execute {
+                    val result = runCatching {
+                        assistantApi.generateArtifact(
+                            baseUrl = configuration.baseUrl,
+                            apiKey = configuration.apiKey,
+                            model = configuration.model,
+                            prompt = spec.prompt(userRequest),
+                        )
+                    }
+                    runOnUiThread {
+                        stopAiLoading(aiButton, loadingAnimation)
+                        result.fold(
+                            onSuccess = { reply ->
+                                container.assistantStore.recordUsage(reply.totalTokens)
+                                runCatching {
+                                    val generated = parseAssistantJson(reply.text)
+                                    onGenerated(generated)
+                                    generated
+                                }.onSuccess { generated ->
+                                        Toast.makeText(this, "AI created ${spec.title}.", Toast.LENGTH_SHORT).show()
+                                        notifyAssistantIfBackground("AI created ${spec.title}: ${generated.optString("name", generated.optString("key", "Ready"))}")
+                                    }
+                                    .onFailure { error -> showAiCreationError(spec, error) }
+                            },
+                            onFailure = { error -> showAiCreationError(spec, error) },
+                        )
+                    }
+                }
+            }
+        }
+        showDialog(promptDialog)
+    }
+
+    private fun startAiLoading(button: Button): ObjectAnimator? {
+        button.isEnabled = false
+        val loaded = UiIconSupport.apply(
+            view = button,
+            label = "Loading",
+            mode = UiIconMode.ICON_ONLY,
+            primary = PRIMARY,
+            iconSizePx = dp(24),
+            drawablePaddingPx = 0,
+            assetName = "loading.png",
+        )
+        if (!loaded) {
+            button.text = "..."
+            return null
+        }
+        return ObjectAnimator.ofFloat(button, View.ROTATION, 0f, 360f).apply {
+            duration = 900L
+            repeatCount = ObjectAnimator.INFINITE
+            start()
+        }
+    }
+
+    private fun stopAiLoading(button: Button, animation: ObjectAnimator?) {
+        animation?.cancel()
+        button.rotation = 0f
+        button.isEnabled = true
+        val loaded = UiIconSupport.apply(
+            view = button,
+            label = "AI",
+            mode = UiIconMode.ICON_ONLY,
+            primary = PRIMARY,
+            iconSizePx = dp(24),
+            drawablePaddingPx = 0,
+            assetName = "assisstant.png",
+        )
+        if (!loaded) button.text = "AI"
+    }
+
+    private fun parseAssistantJson(raw: String): JSONObject {
+        val clean = raw.trim()
+            .removePrefix("```json").removePrefix("```JSON").removePrefix("```")
+            .removeSuffix("```").trim()
+        val start = clean.indexOf('{')
+        val end = clean.lastIndexOf('}')
+        require(start >= 0 && end > start) { "The provider did not return a JSON object." }
+        return JSONObject(clean.substring(start, end + 1))
+    }
+
+    private fun JSONObject.requiredGeneratedText(key: String): String =
+        optString(key).trim().also { require(it.isNotBlank()) { "Generated JSON field '$key' is required." } }
+
+    private fun showAiCreationError(spec: AssistantCreationSpec, error: Throwable) {
+        AlertDialog.Builder(this)
+            .setTitle("AI could not create ${spec.title}")
+            .setMessage(error.message ?: error.javaClass.simpleName)
+            .setPositiveButton("Close", null)
+            .create().also { showDialog(it) }
+        notifyAssistantIfBackground("AI creation failed for ${spec.title}: ${error.message ?: "Unknown error"}")
+    }
+
+    private fun setAssistantBusy(value: Boolean) {
+        assistantBusy = value
+        if (::assistantInput.isInitialized) {
+            assistantInput.isEnabled = !value
+            assistantInput.hint = if (value) "Assistant is working…" else "Message or /stat, /stat.price, /head"
+        }
+    }
+
+    private fun updateAssistantUsageLabels() {
+        val usage = container.assistantStore.usage()
+        if (::assistantContextText.isInitialized) {
+            assistantContextText.text = "Context used: ${assistantContextTokens} input tokens · model limit is provider-defined"
+        }
+        if (::assistantUsageText.isInitialized) {
+            assistantUsageText.text = "Token usage · today ${usage.dailyTokens} · this month ${usage.monthlyTokens}"
+        }
+    }
+
+    private fun expandAssistantSlashCommand(raw: String): String {
+        val statMatch = Regex("""^/(?:stat|stats|statistics)(?:\.([^\s]+))?(?:\s+(.*))?$""", RegexOption.IGNORE_CASE).matchEntire(raw)
+        if (statMatch != null) {
+            val accordion = statMatch.groupValues[1].takeIf { it.isNotBlank() }?.replace('_', ' ')
+            val followUp = statMatch.groupValues[2].takeIf { it.isNotBlank() }
+            return buildString {
+                append("The user invoked a trusted Exvia statistics snippet.\n")
+                append(assistantStatisticsReport(accordion))
+                followUp?.let { append("\n\nUser request: ").append(it) }
+            }
+        }
+        val headMatch = Regex("""^/head(?:\s+(.*))?$""", RegexOption.IGNORE_CASE).matchEntire(raw)
+        if (headMatch != null) {
+            return buildString {
+                append("The user invoked a trusted Exvia table-head snippet.\n")
+                append(assistantTableHead())
+                headMatch.groupValues[1].takeIf { it.isNotBlank() }?.let { append("\n\nUser request: ").append(it) }
+            }
+        }
+        return raw
+    }
+
+    private fun assistantTableHead(): String = buildString {
+        append("Selected file: ").append(selectedPath ?: "none").append('\n')
+        append("Columns: ").append(currentData.keys.joinToString(", ")).append('\n')
+        currentData.rows.take(10).forEachIndexed { index, row ->
+            append(index + 1).append(": ").append(JSONObject(row.values).toString()).append('\n')
+        }
+        if (currentData.rows.isEmpty()) append("No rows are currently visible.")
+    }
+
+    private fun assistantStatisticsReport(accordion: String? = null): String {
+        val data = mainViewModel.state.value.visibleData
+        val wanted = accordion?.trim()?.lowercase(Locale.US)
+        val matchedKey = wanted?.let { value -> data.keys.firstOrNull { it.equals(value, true) } }
+        val financeRequested = wanted == null || wanted in setOf("personal finance", "finance", "core", "expense", "income", "behavior", "liquidity")
+        val keysRequested = when {
+            matchedKey != null -> listOf(matchedKey)
+            wanted == null -> data.keys
+            else -> emptyList()
+        }
+        return buildString {
+            append("Visible file: ").append(selectedPath ?: "none").append("; rows=").append(data.rows.size).append('\n')
+            if (financeRequested) {
+                settings.resolvedFinanceColumns(data.keys).forEach { key ->
+                    val finance = statisticsViewModel.financeStats(data.copy(moneyKey = key))
+                    append("[Personal finance / ").append(key).append("]\n")
+                    append(finance?.toString() ?: "Unavailable").append('\n')
+                }
+            }
+            keysRequested.forEach { key ->
+                val stats = statisticsViewModel.keyStats(data.rows.map { it.values[key].orEmpty() })
+                append('[').append(key).append("]\n").append(stats.toString()).append('\n')
+            }
+            val matchingGroups = normalizedScriptGroups().filter { group -> wanted == null || group.name.equals(wanted, true) }
+            matchingGroups.forEach { group ->
+                val plots = customPlotsDraft.filter { it.groupId == group.id && it.enabled }
+                val metrics = customMetricsDraft.filter { it.groupId == group.id && it.enabled }
+                if (plots.isNotEmpty() || metrics.isNotEmpty()) {
+                    append("[Custom accordion / ").append(group.name).append("]\n")
+                    plots.forEach { append("Plot: ").append(it.name).append(" (engine=").append(it.engine).append(")\n") }
+                    metrics.forEach { append("Metric: ").append(it.name).append("\n") }
+                }
+            }
+            if (wanted != null && !financeRequested && matchedKey == null && matchingGroups.isEmpty()) {
+                append("No Stat accordion named '").append(accordion).append("' was found.")
+            }
+        }
+    }
+
+    private fun executeAssistantTool(name: String, argumentsJson: String): String {
+        val arguments = JSONObject(argumentsJson.ifBlank { "{}" })
+        return when (name) {
+            "inspect_app" -> inspectAssistantApp(arguments.optString("scope"), arguments.optString("name").takeIf { it.isNotBlank() })
+            "navigate_app" -> runAssistantUiAction {
+                val tab = when (arguments.optString("section").lowercase(Locale.US)) {
+                    "table" -> Tab.TABLE
+                    "stat" -> Tab.STAT
+                    "files" -> Tab.FILES
+                    "assistant" -> Tab.ASSISTANT
+                    else -> throw IllegalArgumentException("Unknown section")
+                }
+                showTab(tab)
+                "Navigated to ${arguments.optString("section")}."
+            }
+            "set_table_query" -> runAssistantUiAction {
+                val filtering = arguments.optString("mode").equals("filtering", true)
+                val query = arguments.optString("query")
+                val enabled = arguments.optBoolean("enabled")
+                queryMode = if (filtering) TableQueryMode.FILTERING else TableQueryMode.FLAGGING
+                mainViewModel.setQueryMode(queryMode)
+                if (filtering) {
+                    filterQuery = query
+                    filterEnabled = enabled
+                    applyFilterAndRender(showStatus = true)
+                } else {
+                    flagQuery = query
+                    flagEnabled = enabled
+                    selectedFlagRule = null
+                    applyFlagAndRender(showStatus = true)
+                }
+                filterInput.setText(query)
+                updateQueryControls()
+                "${if (filtering) "Filtering" else "Flagging"} ${if (enabled) "enabled" else "disabled"} with query: $query"
+            }
+            "upsert_app_resource" -> confirmAssistantMutation("Apply Assistant change?", arguments) {
+                upsertAssistantResource(arguments)
+            }
+            "delete_app_resource" -> confirmAssistantMutation("Delete Assistant-selected resource?", arguments) {
+                deleteAssistantResource(arguments)
+            }
+            else -> "Unsupported tool: $name"
+        }
+    }
+
+    private fun inspectAssistantApp(scope: String, name: String?): String = when (scope.lowercase(Locale.US)) {
+        "table" -> assistantTableHead()
+        "statistics" -> assistantStatisticsReport(name)
+        "scripts" -> assistantScriptsReport(name)
+        "settings" -> assistantSafeSettingsReport()
+        "all" -> listOf(
+            assistantSafeSettingsReport(),
+            assistantTableHead(),
+            assistantStatisticsReport(name),
+            assistantScriptsReport(name),
+        ).joinToString("\n\n")
+        else -> "Unknown inspection scope: $scope"
+    }
+
+    private fun assistantSafeSettingsReport(): String = JSONObject().apply {
+        put("repository", JSONObject().apply {
+            put("owner", settings.owner)
+            put("repo", settings.repo)
+            put("branch", settings.branch)
+            put("folder", settings.folder)
+            put("selectedFile", selectedPath)
+        })
+        put("assistant", JSONObject().apply {
+            val config = container.assistantStore.loadConfiguration()
+            put("baseUrl", config.baseUrl)
+            put("model", config.model)
+            put("apiKeyConfigured", config.apiKey.isNotBlank())
+        })
+        put("display", JSONObject().apply {
+            put("rowsPerPage", settings.rowsPerPage)
+            put("iconMode", settings.iconMode.id)
+            put("automaticAmend", settings.automaticAmend)
+        })
+        put("resourceCounts", JSONObject().apply {
+            put("filterSnippets", filterSnippets.size)
+            put("flaggingRules", flaggingRulesDraft.size)
+            put("colorMappings", colorMappingsDraft.size)
+            put("customMetrics", customMetricsDraft.size)
+            put("customPlots", customPlotsDraft.size)
+            put("fileScripts", fileScriptsDraft.size)
+        })
+    }.toString(2)
+
+    private fun assistantScriptsReport(name: String?): String {
+        val wanted = name?.lowercase(Locale.US)
+        fun matches(value: String): Boolean = wanted == null || value.lowercase(Locale.US).contains(wanted)
+        return JSONObject().apply {
+            put("filterSnippets", JSONArray(filterSnippets.filter { matches(it.name) }.map { item ->
+                JSONObject().put("id", item.id).put("name", item.name).put("query", item.query)
+            }))
+            put("flaggingRules", JSONArray(flaggingRulesDraft.filter { matches(it.name) }.map(::assistantStyleRuleJson)))
+            put("colorMappings", JSONArray(colorMappingsDraft.filter { matches(it.name) }.map(::assistantStyleRuleJson)))
+            put("scriptGroups", JSONArray(scriptGroupsDraft.filter { matches(it.name) }.map { JSONObject().put("id", it.id).put("name", it.name) }))
+            put("customMetrics", JSONArray(customMetricsDraft.filter { matches(it.name) }.map { item ->
+                JSONObject().put("id", item.id).put("name", item.name).put("script", item.script).put("groupId", item.groupId).put("enabled", item.enabled)
+            }))
+            put("customPlots", JSONArray(customPlotsDraft.filter { matches(it.name) }.map { item ->
+                JSONObject().put("id", item.id).put("name", item.name).put("script", item.script).put("engine", item.engine).put("groupId", item.groupId).put("enabled", item.enabled)
+            }))
+            put("fileScripts", JSONArray(fileScriptsDraft.filter { matches(it.name) }.map { item ->
+                JSONObject().put("id", item.id).put("name", item.name).put("script", item.script).put("enabled", item.enabled)
+            }))
+            put("imaginaryFields", JSONArray(imaginaryFieldsDraft.filter { matches(it.name) }.map { item ->
+                JSONObject().put("id", item.id).put("name", item.name).put("expression", item.expression).put("enabled", item.enabled)
+            }))
+            put("environmentVariables", JSONArray(environmentVariablesDraft.filter { matches(it.name) }.map { item ->
+                JSONObject().put("id", item.id).put("name", item.name).put("initializerScript", item.initializerScript).put("valueJson", item.valueJson).put("enabled", item.enabled)
+            }))
+            put("notificationRules", JSONArray(notificationRulesDraft.filter { matches(it.name) }.map { item ->
+                JSONObject().put("id", item.id).put("name", item.name).put("eventName", item.eventName).put("script", item.script).put("enabled", item.enabled)
+            }))
+            put("schemaRules", JSONArray(schemaRulesDraft.filter { matches(it.name) }.map { item ->
+                JSONObject().put("id", item.id).put("name", item.name).put("script", item.script).put("enabled", item.enabled)
+            }))
+            put("metricColorMappings", JSONArray(metricColorMappingsDraft.filter { matches(it.name) }.map { item ->
+                JSONObject().put("id", item.id).put("name", item.name).put("metricName", item.metricName).put("script", item.script).put("enabled", item.enabled)
+            }))
+        }.toString(2)
+    }
+
+    private fun assistantStyleRuleJson(item: TableStyleRule): JSONObject = JSONObject()
+        .put("id", item.id)
+        .put("name", item.name)
+        .put("query", item.query)
+        .put("foregroundScript", item.foregroundScript)
+        .put("backgroundScript", item.backgroundScript)
+        .put("contentScript", item.contentScript)
+        .put("enabled", item.enabled)
+
+    private fun runAssistantUiAction(action: () -> String): String {
+        if (Looper.myLooper() == Looper.getMainLooper()) return action()
+        val latch = CountDownLatch(1)
+        val result = arrayOfNulls<String>(1)
+        runOnUiThread {
+            result[0] = runCatching(action).getOrElse { "Action failed: ${it.message}" }
+            latch.countDown()
+        }
+        if (!latch.await(30, TimeUnit.SECONDS)) return "Action timed out."
+        return result[0].orEmpty()
+    }
+
+    private fun confirmAssistantMutation(title: String, arguments: JSONObject, action: () -> String): String {
+        val latch = CountDownLatch(1)
+        val result = arrayOf("User declined the persistent change.")
+        runOnUiThread {
+            AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(arguments.toString(2))
+                .setNegativeButton("Decline") { _, _ -> latch.countDown() }
+                .setPositiveButton("Apply") { _, _ ->
+                    result[0] = runCatching(action).getOrElse { "Change failed: ${it.message}" }
+                    latch.countDown()
+                }
+                .setOnCancelListener { latch.countDown() }
+                .create().also { showDialog(it) }
+        }
+        if (!latch.await(5, TimeUnit.MINUTES)) return "Approval timed out; no change was applied."
+        return result[0]
+    }
+
+    private fun upsertAssistantResource(arguments: JSONObject): String {
+        val resource = arguments.getString("resource")
+        val name = arguments.getString("name").trim().also { require(it.isNotBlank()) { "Name is required" } }
+        val requestedId = arguments.optString("id").takeIf { it.isNotBlank() }
+        val enabled = if (arguments.has("enabled")) arguments.optBoolean("enabled") else true
+        fun idFor(existingId: String?): String = requestedId ?: existingId ?: UUID.randomUUID().toString()
+        fun required(key: String): String = arguments.optString(key).trim().also { require(it.isNotBlank()) { "$key is required" } }
+
+        when (resource) {
+            "filter_snippet" -> {
+                val index = filterSnippets.indexOfFirst { it.id == requestedId || it.name.equals(name, true) }
+                val item = FilterSnippet(idFor(filterSnippets.getOrNull(index)?.id), name, required("query"))
+                if (index < 0) filterSnippets += item else filterSnippets[index] = item
+                settingsViewModel.saveSnippets(filterSnippets.toList())
+            }
+            "flagging_rule", "color_mapping" -> {
+                val list = if (resource == "flagging_rule") flaggingRulesDraft else colorMappingsDraft
+                val index = list.indexOfFirst { it.id == requestedId || it.name.equals(name, true) }
+                val previous = list.getOrNull(index)
+                val item = TableStyleRule(
+                    id = idFor(previous?.id), name = name, query = required("query"),
+                    foregroundScript = arguments.optString("foreground_script", previous?.foregroundScript.orEmpty()),
+                    backgroundScript = arguments.optString("background_script", previous?.backgroundScript.orEmpty()),
+                    contentScript = arguments.optString("content_script", previous?.contentScript.orEmpty()),
+                    enabled = enabled,
+                )
+                require(item.foregroundScript.isNotBlank() || item.backgroundScript.isNotBlank() || item.contentScript.isNotBlank()) { "At least one style script is required" }
+                if (index < 0) list += item else list[index] = item
+                persistTableRules("Assistant updated $resource.")
+            }
+            "script_group" -> {
+                val index = scriptGroupsDraft.indexOfFirst { it.id == requestedId || it.name.equals(name, true) }
+                val item = ScriptGroupDefinition(idFor(scriptGroupsDraft.getOrNull(index)?.id), name)
+                if (index < 0) scriptGroupsDraft += item else scriptGroupsDraft[index] = item
+                persistScriptGroups("Assistant updated script group.")
+            }
+            "custom_metric" -> {
+                val index = customMetricsDraft.indexOfFirst { it.id == requestedId || it.name.equals(name, true) }
+                val previous = customMetricsDraft.getOrNull(index)
+                val item = CustomMetricDefinition(idFor(previous?.id), name, required("script"), enabled, arguments.optString("group_id", previous?.groupId ?: DEFAULT_SCRIPT_GROUP_ID))
+                if (index < 0) customMetricsDraft += item else customMetricsDraft[index] = item
+                persistCustomMetrics("Assistant updated custom metric.")
+            }
+            "custom_plot" -> {
+                val index = customPlotsDraft.indexOfFirst { it.id == requestedId || it.name.equals(name, true) }
+                val previous = customPlotsDraft.getOrNull(index)
+                val item = CustomPlotDefinition(idFor(previous?.id), name, required("script"), arguments.optString("engine", previous?.engine ?: "auto"), enabled, arguments.optString("group_id", previous?.groupId ?: DEFAULT_SCRIPT_GROUP_ID))
+                if (index < 0) customPlotsDraft += item else customPlotsDraft[index] = item
+                persistCustomPlots("Assistant updated custom plot.")
+            }
+            "file_script" -> {
+                val index = fileScriptsDraft.indexOfFirst { it.id == requestedId || it.name.equals(name, true) }
+                val item = FileScriptDefinition(idFor(fileScriptsDraft.getOrNull(index)?.id), name, required("script"), enabled)
+                if (index < 0) fileScriptsDraft += item else fileScriptsDraft[index] = item
+                persistFileScripts("Assistant updated file script.")
+            }
+            "imaginary_field" -> {
+                val index = imaginaryFieldsDraft.indexOfFirst { it.id == requestedId || it.name.equals(name, true) }
+                val previous = imaginaryFieldsDraft.getOrNull(index)
+                val item = ImaginaryFieldDefinition(idFor(previous?.id), name, arguments.optString("expression", previous?.expression.orEmpty()), previous?.manualValues.orEmpty(), enabled)
+                if (index < 0) imaginaryFieldsDraft += item else imaginaryFieldsDraft[index] = item
+                persistImaginaryFields("Assistant updated imaginary field.")
+            }
+            "environment_variable" -> {
+                val index = environmentVariablesDraft.indexOfFirst { it.id == requestedId || it.name.equals(name, true) }
+                val previous = environmentVariablesDraft.getOrNull(index)
+                val item = EnvironmentVariableDefinition(idFor(previous?.id), name, arguments.optString("script", previous?.initializerScript ?: "return null;"), previous?.valueJson ?: "null", enabled)
+                if (index < 0) environmentVariablesDraft += item else environmentVariablesDraft[index] = item
+                persistEnvironmentVariables("Assistant updated ENV variable.")
+            }
+            "notification_rule" -> {
+                val index = notificationRulesDraft.indexOfFirst { it.id == requestedId || it.name.equals(name, true) }
+                val previous = notificationRulesDraft.getOrNull(index)
+                val item = NotificationRule(idFor(previous?.id), name, required("event_name"), required("script"), enabled)
+                if (index < 0) notificationRulesDraft += item else notificationRulesDraft[index] = item
+                persistNotificationRules("Assistant updated notification rule.")
+            }
+            "schema_rule" -> {
+                val index = schemaRulesDraft.indexOfFirst { it.id == requestedId || it.name.equals(name, true) }
+                val item = SchemaRuleDefinition(idFor(schemaRulesDraft.getOrNull(index)?.id), name, required("script"), enabled)
+                if (index < 0) schemaRulesDraft += item else schemaRulesDraft[index] = item
+                persistSchemaRules("Assistant updated schema rule.")
+            }
+            "metric_color_mapping" -> {
+                val index = metricColorMappingsDraft.indexOfFirst { it.id == requestedId || it.name.equals(name, true) }
+                val item = MetricColorRule(idFor(metricColorMappingsDraft.getOrNull(index)?.id), name, required("metric_name"), required("script"), enabled)
+                if (index < 0) metricColorMappingsDraft += item else metricColorMappingsDraft[index] = item
+                persistMetricColorMappings("Assistant updated metric color mapping.")
+            }
+            else -> throw IllegalArgumentException("Unknown resource: $resource")
+        }
+        return "Applied $resource '$name'."
+    }
+
+    private fun deleteAssistantResource(arguments: JSONObject): String {
+        val resource = arguments.getString("resource")
+        val key = arguments.getString("id_or_name")
+        fun <T> MutableList<T>.removeMatching(id: (T) -> String, name: (T) -> String): Boolean =
+            removeAll { id(it) == key || name(it).equals(key, true) }
+        val removed = when (resource) {
+            "filter_snippet" -> filterSnippets.removeMatching({ it.id }, { it.name }).also { if (it) settingsViewModel.saveSnippets(filterSnippets.toList()) }
+            "flagging_rule" -> flaggingRulesDraft.removeMatching({ it.id }, { it.name }).also { if (it) persistTableRules("Assistant removed flagging rule.") }
+            "color_mapping" -> colorMappingsDraft.removeMatching({ it.id }, { it.name }).also { if (it) persistTableRules("Assistant removed color mapping.") }
+            "script_group" -> {
+                val target = scriptGroupsDraft.firstOrNull { it.id == key || it.name.equals(key, true) }
+                if (target == null || target.id == DEFAULT_SCRIPT_GROUP_ID) false else {
+                    scriptGroupsDraft.removeAll { it.id == target.id }
+                    customMetricsDraft = customMetricsDraft.map { if (it.groupId == target.id) it.copy(groupId = DEFAULT_SCRIPT_GROUP_ID) else it }.toMutableList()
+                    customPlotsDraft = customPlotsDraft.map { if (it.groupId == target.id) it.copy(groupId = DEFAULT_SCRIPT_GROUP_ID) else it }.toMutableList()
+                    persistScriptGroups("Assistant removed script group.")
+                    persistCustomMetrics("Orphaned metrics moved to Default.")
+                    persistCustomPlots("Orphaned plots moved to Default.")
+                    true
+                }
+            }
+            "custom_metric" -> customMetricsDraft.removeMatching({ it.id }, { it.name }).also { if (it) persistCustomMetrics("Assistant removed custom metric.") }
+            "custom_plot" -> customPlotsDraft.removeMatching({ it.id }, { it.name }).also { if (it) persistCustomPlots("Assistant removed custom plot.") }
+            "file_script" -> fileScriptsDraft.removeMatching({ it.id }, { it.name }).also { if (it) persistFileScripts("Assistant removed file script.") }
+            "imaginary_field" -> imaginaryFieldsDraft.removeMatching({ it.id }, { it.name }).also { if (it) persistImaginaryFields("Assistant removed imaginary field.") }
+            "environment_variable" -> environmentVariablesDraft.removeMatching({ it.id }, { it.name }).also { if (it) persistEnvironmentVariables("Assistant removed ENV variable.") }
+            "notification_rule" -> notificationRulesDraft.removeMatching({ it.id }, { it.name }).also { if (it) persistNotificationRules("Assistant removed notification rule.") }
+            "schema_rule" -> schemaRulesDraft.removeMatching({ it.id }, { it.name }).also { if (it) persistSchemaRules("Assistant removed schema rule.") }
+            "metric_color_mapping" -> metricColorMappingsDraft.removeMatching({ it.id }, { it.name }).also { if (it) persistMetricColorMappings("Assistant removed metric color mapping.") }
+            else -> throw IllegalArgumentException("Unknown resource: $resource")
+        }
+        return if (removed) "Deleted $resource '$key'." else "No matching $resource named '$key' was found."
+    }
+
     private data class ConfigField(val wrapper: LinearLayout, val input: EditText)
 
     private fun buildSettingsDrawer(): ScrollView {
@@ -846,6 +1765,34 @@ class MainActivity : Activity() {
         tokenSetting = token.input.apply {
             hint = if (settingsViewModel.token() == null) "github.pat" else "github.pat  ${"*".repeat(12)}"
         }
+
+        val assistantConfiguration = container.assistantStore.loadConfiguration()
+        val assistantBaseUrl = configField(
+            "BASE_URL",
+            "assistant.base_url",
+            assistantConfiguration.baseUrl.ifBlank { AssistantStore.DEFAULT_BASE_URL },
+            "OpenAI-compatible HTTPS API root. OpenAI: https://api.openai.com/v1/ · OpenRouter: https://openrouter.ai/api/v1/ · Gemini: https://generativelanguage.googleapis.com/v1beta/openai/. Exvia selects the supported API shape automatically.",
+        )
+        assistantBaseUrlSetting = assistantBaseUrl.input
+        val assistantApiKey = configField(
+            "API_KEY",
+            "assistant.api_key",
+            "",
+            "Provider API key. It is masked while typed, encrypted with Android Keystore, kept local, and never synchronized to GitHub.",
+            password = true,
+        )
+        assistantApiKeySetting = assistantApiKey.input.apply {
+            hint = if (assistantConfiguration.apiKey.isBlank()) "assistant.api_key" else "assistant.api_key  ${"*".repeat(12)}"
+        }
+        val assistantModel = configField(
+            "MODEL",
+            "assistant.model",
+            assistantConfiguration.model,
+            "Model identifier accepted by the configured provider, for example gpt-4.1-mini.",
+        )
+        assistantModelSetting = assistantModel.input
+        assistantUsageText = infoText("").apply { setTextColor(MUTED); textSize = 11f }
+        updateAssistantUsageLabels()
 
         val array = configField("Object array key (fallback)", "schema.array_key", settings.arrayKey, "If the JSON root is an object rather than an array, this key selects the row array.")
         arrayKeySetting = array.input
@@ -1004,6 +1951,30 @@ class MainActivity : Activity() {
                 }, spacedMatchWidth(6))
             }, spacedMatchWidth(10))
         }
+
+        body.addView(accordion("Assistant", tooltip = "Configure an OpenAI-compatible provider. Exvia uses Responses or Chat Completions as supported. The Assistant tab appears after all three values are saved.") { assistantBox ->
+            listOf(assistantBaseUrl.wrapper, assistantApiKey.wrapper, assistantModel.wrapper)
+                .forEach { assistantBox.addView(it, spacedMatchWidth(5)) }
+            assistantBox.addView(assistantUsageText, spacedMatchWidth(6))
+            assistantBox.addView(styledButton("Save Assistant and reload").apply {
+                setOnClickListener { saveAssistantConfigurationAndReload() }
+            }, spacedMatchWidth(6))
+            assistantBox.addView(styledButton("Clear stored API key", accent = SECONDARY).apply {
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Clear Assistant API key?")
+                        .setMessage("The Assistant tab will be hidden after reload until a new key is saved.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Clear") { _, _ ->
+                            container.assistantStore.clearApiKey()
+                            assistantApiKeySetting.text.clear()
+                            assistantApiKeySetting.hint = "assistant.api_key"
+                            statusText.text = "Stored Assistant API key cleared."
+                        }
+                        .create().also { showDialog(it) }
+                }
+            }, spacedMatchWidth(6))
+        }, spacedMatchWidth(10))
 
         body.addView(accordion("Color", tooltip = "Built-in and named custom UI themes, plus six configurable semantic palette colors.") { container ->
             container.addView(infoText("UI theme").apply {
@@ -1421,8 +2392,8 @@ class MainActivity : Activity() {
                 plots.forEach { plot ->
                     val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                     row.addView(infoText(plot.name).apply { setTextColor(if (plot.enabled) WHITE else MUTED) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png"); applyActionIcon(this, "Edit", "Edit.png"); setOnClickListener { editCustomPlot(plot) } }, LinearLayout.LayoutParams(dp(48), dp(30)))
-                    row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { customPlotsDraft.removeAll { it.id == plot.id }; persistCustomPlots("Custom plot removed."); renderCustomStatSettings() } }, LinearLayout.LayoutParams(dp(34), dp(30)))
+                    row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png"); setOnClickListener { editCustomPlot(plot) } }, LinearLayout.LayoutParams(dp(48), dp(30)))
+                    row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { customPlotsDraft.removeAll { it.id == plot.id }; persistCustomPlots("Custom plot removed."); renderCustomStatSettings() } }, LinearLayout.LayoutParams(dp(34), dp(30)))
                     box.addView(row, matchWidth())
                 }
                 box.addView(infoText("# Metrics").apply { setTextColor(PRIMARY); AppFonts.apply(this, bold = true) }, spacedMatchWidth(5))
@@ -1430,8 +2401,8 @@ class MainActivity : Activity() {
                 metrics.forEach { metric ->
                     val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                     row.addView(infoText(metric.name).apply { setTextColor(if (metric.enabled) WHITE else MUTED) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png"); applyActionIcon(this, "Edit", "Edit.png"); setOnClickListener { editCustomMetric(metric) } }, LinearLayout.LayoutParams(dp(48), dp(30)))
-                    row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { customMetricsDraft.removeAll { it.id == metric.id }; persistCustomMetrics("Custom metric removed."); renderCustomStatSettings() } }, LinearLayout.LayoutParams(dp(34), dp(30)))
+                    row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png"); setOnClickListener { editCustomMetric(metric) } }, LinearLayout.LayoutParams(dp(48), dp(30)))
+                    row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { customMetricsDraft.removeAll { it.id == metric.id }; persistCustomMetrics("Custom metric removed."); renderCustomStatSettings() } }, LinearLayout.LayoutParams(dp(34), dp(30)))
                     box.addView(row, matchWidth())
                 }
             }, matchWidth())
@@ -1458,12 +2429,16 @@ class MainActivity : Activity() {
         }
         var enabled=source?.enabled?:true
         val enabledButton=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;applyActionIcon(this,if(enabled)"Enabled" else "Disabled")}}
+        lateinit var dialog: AlertDialog
         val body=LinearLayout(this).apply{
             orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0)
             addView(infoText("Available: jsonFile, d3, Plot, aq, theme, helpers, context.inputs, and ENV. Return a scalar/object, or {label,value,inputs:[{name,label,placeholder,default,env:'ENV.x.path'}]} to render persistent inputs.").apply{setTextColor(MUTED)},spacedMatchWidth(5))
+            if(existing==null) addView(assistantCreationButton(AssistantCreationPrompts.spec(AssistantCreationKind.METRIC)){generated->
+                name.setText(generated.requiredGeneratedText("name"));script.setText(generated.requiredGeneratedText("script"));dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            },spacedMatchWidth(6))
             addView(name,spacedMatchWidth(5));addView(group,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(350)));addView(enabledButton,spacedMatchWidth(5))
         }
-        val dialog=AlertDialog.Builder(this).setTitle(if(existing!=null)"Edit custom metric" else "New custom metric").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create()
+        dialog=AlertDialog.Builder(this).setTitle(if(existing!=null)"Edit custom metric" else "New custom metric").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create()
         dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
             val n=name.text.toString().trim();val code=script.text.toString().trim();if(n.isBlank()){name.error="Name is required";return@setOnClickListener};if(code.isBlank()){script.error="JavaScript is required";return@setOnClickListener}
             @Suppress("UNCHECKED_CAST") val groups=group.tag as List<ScriptGroupDefinition>; val gid=groups.getOrNull(group.selectedItemPosition)?.id?:DEFAULT_SCRIPT_GROUP_ID
@@ -1483,8 +2458,9 @@ class MainActivity : Activity() {
         val script=JavaScriptCodeEditor(this).apply{hint="custom_plot.javascript";setText(source?.script?:"const rows=helpers.rows(jsonFile); return Plot.plot({width:context.width,height:context.height,marks:[Plot.dot(rows,{x:(d,i)=>i,y:d=>helpers.number(d.PRICE),tip:true})]});")}
         var enabled=source?.enabled?:true
         val enabledButton=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;applyActionIcon(this,if(enabled)"Enabled" else "Disabled")}}
-        val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Available: d3, Plot, aq, jsonFile, context, theme, helpers, and ENV. Custom plots receive Exvia semantic zoom automatically when possible.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(name,spacedMatchWidth(5));addView(group,spacedMatchWidth(5));addView(engine,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(390)));addView(enabledButton,spacedMatchWidth(5))}
-        val dialog=AlertDialog.Builder(this).setTitle(if(existing!=null)"Edit custom plot" else "New custom plot").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create()
+        lateinit var dialog: AlertDialog
+        val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Available: d3, Plot, aq, jsonFile, context, theme, helpers, and ENV. Custom plots receive Exvia semantic zoom automatically when possible.").apply{setTextColor(MUTED)},spacedMatchWidth(5));if(existing==null)addView(assistantCreationButton(AssistantCreationPrompts.spec(AssistantCreationKind.PLOT)){generated->name.setText(generated.requiredGeneratedText("name"));script.setText(generated.requiredGeneratedText("script"));engine.setSelection(engineValues.indexOf(generated.optString("engine","auto")).coerceAtLeast(0));dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()},spacedMatchWidth(6));addView(name,spacedMatchWidth(5));addView(group,spacedMatchWidth(5));addView(engine,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(390)));addView(enabledButton,spacedMatchWidth(5))}
+        dialog=AlertDialog.Builder(this).setTitle(if(existing!=null)"Edit custom plot" else "New custom plot").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create()
         dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
             val n=name.text.toString().trim();val code=script.text.toString().trim();if(n.isBlank()){name.error="Name is required";return@setOnClickListener};if(code.isBlank()){script.error="JavaScript is required";return@setOnClickListener}
             @Suppress("UNCHECKED_CAST") val groups=group.tag as List<ScriptGroupDefinition>;val gid=groups.getOrNull(group.selectedItemPosition)?.id?:DEFAULT_SCRIPT_GROUP_ID
@@ -1588,7 +2564,7 @@ class MainActivity : Activity() {
             environmentVariablesDraft.forEach { item ->
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 row.addView(infoText("ENV.${item.name}").apply { setOnClickListener { editEnvironmentVariable(item, null) { dialog.dismiss(); showEnvironmentManager() } } }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { environmentVariablesDraft.removeAll { it.id == item.id }; persistEnvironmentVariables("ENV variable removed."); rebuild() } }, LinearLayout.LayoutParams(dp(40), dp(32)))
+                row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { environmentVariablesDraft.removeAll { it.id == item.id }; persistEnvironmentVariables("ENV variable removed."); rebuild() } }, LinearLayout.LayoutParams(dp(40), dp(32)))
                 root.addView(row, matchWidth())
             }
         }
@@ -1600,12 +2576,21 @@ class MainActivity : Activity() {
         val source = existing ?: template
         val name = styledInput("env.name").apply { setText(source?.name.orEmpty()) }
         val script = JavaScriptCodeEditor(this).apply { hint = "env.initializer.js"; setText(source?.initializerScript ?: "return null;") }
+        lateinit var dialog: AlertDialog
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0)
             addView(infoText("Initializer is JavaScript. Example usage elsewhere: ENV.budget.get('daily'), ENV.budget.put('daily', 60), ENV.budget.post({monthly:1800}), ENV.budget.delete('daily'). Runtime changes persist automatically.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            if (existing == null) addView(assistantCreationButton(AssistantCreationPrompts.spec(AssistantCreationKind.ENVIRONMENT)) { generated ->
+                val generatedName = generated.requiredGeneratedText("name")
+                require(generatedName.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) { "Generated ENV name is not a JavaScript identifier." }
+                require(environmentVariablesDraft.none { it.name.equals(generatedName, true) }) { "An ENV variable named '$generatedName' already exists." }
+                name.setText(generatedName)
+                script.setText(generated.requiredGeneratedText("initializerScript"))
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            }, spacedMatchWidth(6))
             addView(name, spacedMatchWidth(5)); addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(260)))
         }
-        val dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New ENV variable" else "Edit ENV variable").setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+        dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New ENV variable" else "Edit ENV variable").setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
         dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val n = name.text.toString().trim(); if (n.isBlank() || !n.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) { name.error = "Use a JavaScript identifier"; return@setOnClickListener }
             if (environmentVariablesDraft.any { it.id != existing?.id && it.name.equals(n, true) }) { name.error = "ENV name already exists"; return@setOnClickListener }
@@ -1638,7 +2623,7 @@ class MainActivity : Activity() {
             notificationRulesDraft.forEach { rule ->
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 row.addView(infoText("${rule.name} · ${rule.eventName}").apply { setTextColor(if (rule.enabled) WHITE else MUTED); setOnClickListener { editNotificationRule(rule, null) { dialog.dismiss(); showNotificationManager() } } }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { notificationRulesDraft.removeAll { it.id == rule.id }; persistNotificationRules("Notification rule removed."); rebuild() } }, LinearLayout.LayoutParams(dp(40), dp(32)))
+                row.addView(TextView(this).apply { text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png"); setOnClickListener { notificationRulesDraft.removeAll { it.id == rule.id }; persistNotificationRules("Notification rule removed."); rebuild() } }, LinearLayout.LayoutParams(dp(40), dp(32)))
                 root.addView(row, matchWidth())
             }
         }
@@ -1653,8 +2638,21 @@ class MainActivity : Activity() {
         val script = JavaScriptCodeEditor(this).apply { hint = "notification.javascript"; setText(source?.script ?: "return {notify:true,title:'Exvia',body:String(event.name)};") }
         var enabled = source?.enabled ?: true
         val enabledButton = styledButton(if (enabled) "Enabled" else "Disabled").apply { setOnClickListener { enabled = !enabled; applyActionIcon(this, if (enabled) "Enabled" else "Disabled") } }
-        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0); addView(infoText("Available: event, metric(name), jsonFile, ENV, d3, Plot, aq, theme and helpers. Return {notify,title,body,severity:'red|normal',IS_TOAST:true|false}. IS_TOAST shows an in-app Android Toast; notify controls the system notification.").apply { setTextColor(MUTED) }, spacedMatchWidth(5)); addView(name, spacedMatchWidth(5)); addView(event, spacedMatchWidth(5)); addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))); addView(enabledButton, spacedMatchWidth(5)) }
-        val dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New notification rule" else "Edit notification rule").setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+        lateinit var dialog: AlertDialog
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0)
+            addView(infoText("Available: event, metric(name), jsonFile, ENV, d3, Plot, aq, theme and helpers. Return {notify,title,body,severity:'red|normal',IS_TOAST:true|false}. IS_TOAST shows an in-app Android Toast; notify controls the system notification.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+            if (existing == null) addView(assistantCreationButton(AssistantCreationPrompts.spec(AssistantCreationKind.NOTIFICATION)) { generated ->
+                name.setText(generated.requiredGeneratedText("name"))
+                val selectedEvent = generated.requiredGeneratedText("eventName")
+                require(selectedEvent in events) { "Generated eventName must be one of: ${events.joinToString()}." }
+                event.setSelection(events.indexOf(selectedEvent).takeIf { it >= 0 } ?: 0)
+                script.setText(generated.requiredGeneratedText("script"))
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            }, spacedMatchWidth(6))
+            addView(name, spacedMatchWidth(5)); addView(event, spacedMatchWidth(5)); addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))); addView(enabledButton, spacedMatchWidth(5))
+        }
+        dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New notification rule" else "Edit notification rule").setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
         dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { val n = name.text.toString().trim(); if (n.isBlank()) { name.error = "Name required"; return@setOnClickListener }; val next = NotificationRule(existing?.id ?: UUID.randomUUID().toString(), n, events[event.selectedItemPosition], script.text.toString(), enabled); notificationRulesDraft = if (existing == null) (notificationRulesDraft + next).toMutableList() else notificationRulesDraft.map { if (it.id == existing.id) next else it }.toMutableList(); persistNotificationRules("Notification rule auto-saved."); dialog.dismiss(); done() } }
         showDialog(dialog)
     }
@@ -1665,11 +2663,59 @@ class MainActivity : Activity() {
         fun rebuild(){ root.removeAllViews(); root.addView(accordion("Built-in schema examples", initiallyOpen=false){ box -> BuiltinExamples.schemaRules.forEach { e -> val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(e.name),LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="Use";gravity=Gravity.CENTER;setTextColor(PRIMARY);AppFonts.apply(this);applyActionIcon(this,"Use","Use.png");setOnClickListener{editSchemaRule(null,e){dialog.dismiss();showSchemaRuleManager()}}},LinearLayout.LayoutParams(dp(52),dp(30)));box.addView(row,matchWidth()) }},matchWidth());root.addView(styledButton("+ Add schema rule").apply{setOnClickListener{editSchemaRule(null,null){dialog.dismiss();showSchemaRuleManager()}}},spacedMatchWidth(5));schemaRulesDraft.forEach{r->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(r.name).apply{setTextColor(if(r.enabled)WHITE else MUTED);setOnClickListener{editSchemaRule(r,null){dialog.dismiss();showSchemaRuleManager()}}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);applyActionIcon(this,"Delete","Delete.png");setOnClickListener{schemaRulesDraft.removeAll{it.id==r.id};persistSchemaRules("Schema rule removed.");rebuild()}},LinearLayout.LayoutParams(dp(40),dp(32)));root.addView(row,matchWidth())}}
         dialog=AlertDialog.Builder(this).setTitle("Key schema scripts").setView(ScrollView(this).apply{addView(root,matchWidth())}).setNegativeButton("Close",null).create();rebuild();showDialog(dialog)
     }
-    private fun editSchemaRule(existing:SchemaRuleDefinition?,template:SchemaRuleDefinition?,done:()->Unit){val source=existing?:template;val name=styledInput("schema_rule.name").apply{setText(source?.name.orEmpty())};val script=JavaScriptCodeEditor(this).apply{setText(source?.script?:"return {};")};var enabled=source?.enabled?:true;val toggle=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;applyActionIcon(this,if(enabled)"Enabled" else "Disabled")}};val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Per key, return any of DEFAULT_VALUE, HIDDEN, NUMBER_ONLY_KEYPAD, PLACEHOLDER, AUTO_COMPLETION, AUTO_COMPLETION_PARSING, BOOLEAN_01. Available: key, rows, ENV, context.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(name,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(300)));addView(toggle,spacedMatchWidth(5))};val dialog=AlertDialog.Builder(this).setTitle(if(existing==null)"New schema rule" else "Edit schema rule").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val n=name.text.toString().trim();if(n.isBlank()){name.error="Name required";return@setOnClickListener};val next=SchemaRuleDefinition(existing?.id?:UUID.randomUUID().toString(),n,script.text.toString(),enabled);schemaRulesDraft=if(existing==null)(schemaRulesDraft+next).toMutableList() else schemaRulesDraft.map{if(it.id==existing.id)next else it}.toMutableList();persistSchemaRules("Schema rule auto-saved.");dialog.dismiss();done()}};showDialog(dialog)}
+    private fun editSchemaRule(existing: SchemaRuleDefinition?, template: SchemaRuleDefinition?, done: () -> Unit) {
+        val source = existing ?: template
+        val name = styledInput("schema_rule.name").apply { setText(source?.name.orEmpty()) }
+        val script = JavaScriptCodeEditor(this).apply { setText(source?.script ?: "return {};") }
+        var enabled = source?.enabled ?: true
+        val toggle = styledButton(if (enabled) "Enabled" else "Disabled").apply { setOnClickListener { enabled = !enabled; applyActionIcon(this, if (enabled) "Enabled" else "Disabled") } }
+        lateinit var dialog: AlertDialog
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0)
+            addView(infoText("Per key, return any of DEFAULT_VALUE, HIDDEN, NUMBER_ONLY_KEYPAD, PLACEHOLDER, AUTO_COMPLETION, AUTO_COMPLETION_PARSING, BOOLEAN_01. Available: key, rows, ENV, context.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+            if (existing == null) addView(assistantCreationButton(AssistantCreationPrompts.spec(AssistantCreationKind.SCHEMA_RULE)) { generated ->
+                name.setText(generated.requiredGeneratedText("name")); script.setText(generated.requiredGeneratedText("script")); dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            }, spacedMatchWidth(6))
+            addView(name, spacedMatchWidth(5)); addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))); addView(toggle, spacedMatchWidth(5))
+        }
+        dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New schema rule" else "Edit schema rule").setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+        dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val n = name.text.toString().trim(); if (n.isBlank()) { name.error = "Name required"; return@setOnClickListener }
+            val next = SchemaRuleDefinition(existing?.id ?: UUID.randomUUID().toString(), n, script.text.toString(), enabled)
+            schemaRulesDraft = if (existing == null) (schemaRulesDraft + next).toMutableList() else schemaRulesDraft.map { if (it.id == existing.id) next else it }.toMutableList()
+            persistSchemaRules("Schema rule auto-saved."); dialog.dismiss(); done()
+        } }
+        showDialog(dialog)
+    }
 
     private fun persistMetricColorMappings(message:String){settings=settings.copy(metricColorMappings=metricColorMappingsDraft.toList());settingsViewModel.saveMetricColorMappings(settings);metricColorSignature="";statusText.text=message;renderStats(mainViewModel.state.value.visibleData)}
     private fun showMetricColorManager(){val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),0,dp(12),0)};lateinit var dialog:AlertDialog;fun rebuild(){root.removeAllViews();root.addView(accordion("Built-in metric color examples",initiallyOpen=false){box->BuiltinExamples.metricColorRules.forEach{e->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText(e.name),LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="Use";gravity=Gravity.CENTER;setTextColor(PRIMARY);AppFonts.apply(this);applyActionIcon(this,"Use","Use.png");setOnClickListener{editMetricColorRule(null,e){dialog.dismiss();showMetricColorManager()}}},LinearLayout.LayoutParams(dp(52),dp(30)));box.addView(row,matchWidth())}},matchWidth());root.addView(styledButton("+ Add metric color rule").apply{setOnClickListener{editMetricColorRule(null,null){dialog.dismiss();showMetricColorManager()}}},spacedMatchWidth(5));metricColorMappingsDraft.forEach{r->val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};row.addView(infoText("${r.name} · ${r.metricName}").apply{setOnClickListener{editMetricColorRule(r,null){dialog.dismiss();showMetricColorManager()}}},LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));row.addView(TextView(this).apply{text="×";gravity=Gravity.CENTER;setTextColor(RED);AppFonts.apply(this,bold=true);applyActionIcon(this,"Delete","Delete.png");setOnClickListener{metricColorMappingsDraft.removeAll{it.id==r.id};persistMetricColorMappings("Metric color rule removed.");rebuild()}},LinearLayout.LayoutParams(dp(40),dp(32)));root.addView(row,matchWidth())}};dialog=AlertDialog.Builder(this).setTitle("Metric Color Mapping").setView(ScrollView(this).apply{addView(root,matchWidth())}).setNegativeButton("Close",null).create();rebuild();showDialog(dialog)}
-    private fun editMetricColorRule(existing:MetricColorRule?,template:MetricColorRule?,done:()->Unit){val source=existing?:template;val name=styledInput("metric_color.name").apply{setText(source?.name.orEmpty())};val metric=styledInput("metric.name or *").apply{setText(source?.metricName?:"*")};val script=JavaScriptCodeEditor(this).apply{setText(source?.script?:"const n=Number(metric.value); return {key:n<0?theme.negative:theme.positive,value:n<0?theme.negative:theme.positive};")};var enabled=source?.enabled?:true;val toggle=styledButton(if(enabled)"Enabled" else "Disabled").apply{setOnClickListener{enabled=!enabled;applyActionIcon(this,if(enabled)"Enabled" else "Disabled")}};val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,dp(14),0);addView(infoText("Return {key:'#RRGGBB', value:'#RRGGBB'}. metric.name/value are exposed; metrics('Mean − Median gap') can read another rendered metric. ENV and theme are also available.").apply{setTextColor(MUTED)},spacedMatchWidth(5));addView(name,spacedMatchWidth(5));addView(metric,spacedMatchWidth(5));addView(script,LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(260)));addView(toggle,spacedMatchWidth(5))};val dialog=AlertDialog.Builder(this).setTitle(if(existing==null)"New metric color rule" else "Edit metric color rule").setView(body).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val n=name.text.toString().trim();val m=metric.text.toString().trim();if(n.isBlank()||m.isBlank()){name.error="Name and metric are required";return@setOnClickListener};val next=MetricColorRule(existing?.id?:UUID.randomUUID().toString(),n,m,script.text.toString(),enabled);metricColorMappingsDraft=if(existing==null)(metricColorMappingsDraft+next).toMutableList() else metricColorMappingsDraft.map{if(it.id==existing.id)next else it}.toMutableList();persistMetricColorMappings("Metric color rule auto-saved.");dialog.dismiss();done()}};showDialog(dialog)}
+    private fun editMetricColorRule(existing: MetricColorRule?, template: MetricColorRule?, done: () -> Unit) {
+        val source = existing ?: template
+        val name = styledInput("metric_color.name").apply { setText(source?.name.orEmpty()) }
+        val metric = styledInput("metric.name or *").apply { setText(source?.metricName ?: "*") }
+        val script = JavaScriptCodeEditor(this).apply { setText(source?.script ?: "const n=Number(metric.value); return {key:n<0?theme.negative:theme.positive,value:n<0?theme.negative:theme.positive};") }
+        var enabled = source?.enabled ?: true
+        val toggle = styledButton(if (enabled) "Enabled" else "Disabled").apply { setOnClickListener { enabled = !enabled; applyActionIcon(this, if (enabled) "Enabled" else "Disabled") } }
+        lateinit var dialog: AlertDialog
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0)
+            addView(infoText("Return {key:'#RRGGBB', value:'#RRGGBB'}. metric.name/value are exposed; metrics('Mean − Median gap') can read another rendered metric. ENV and theme are also available.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+            if (existing == null) addView(assistantCreationButton(AssistantCreationPrompts.spec(AssistantCreationKind.METRIC_COLOR)) { generated ->
+                name.setText(generated.requiredGeneratedText("name")); metric.setText(generated.requiredGeneratedText("metricName")); script.setText(generated.requiredGeneratedText("script")); dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            }, spacedMatchWidth(6))
+            addView(name, spacedMatchWidth(5)); addView(metric, spacedMatchWidth(5)); addView(script, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(260))); addView(toggle, spacedMatchWidth(5))
+        }
+        dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New metric color rule" else "Edit metric color rule").setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
+        dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val n = name.text.toString().trim(); val m = metric.text.toString().trim()
+            if (n.isBlank() || m.isBlank()) { name.error = "Name and metric are required"; return@setOnClickListener }
+            val next = MetricColorRule(existing?.id ?: UUID.randomUUID().toString(), n, m, script.text.toString(), enabled)
+            metricColorMappingsDraft = if (existing == null) (metricColorMappingsDraft + next).toMutableList() else metricColorMappingsDraft.map { if (it.id == existing.id) next else it }.toMutableList()
+            persistMetricColorMappings("Metric color rule auto-saved."); dialog.dismiss(); done()
+        } }
+        showDialog(dialog)
+    }
 
     private fun persistCustomMetricInputs() { settings=settings.copy(customMetricInputs=customMetricInputsDraft.toMap()); settingsViewModel.saveCustomMetricInputs(settings) }
 
@@ -1750,6 +2796,9 @@ class MainActivity : Activity() {
         val textScale = textScaleSetting.text.toString().trim().toDoubleOrNull()
         val rowsPerPage = rowsPerPageSetting.text.toString().trim().toIntOrNull()
         val undoHistoryLimit = undoHistoryLimitSetting.text.toString().trim().toIntOrNull()
+        val assistantBaseUrl = assistantBaseUrlSetting.text.toString().trim()
+        val assistantModel = assistantModelSetting.text.toString().trim()
+        val assistantEnteredKey = assistantApiKeySetting.text.toString().trim().ifBlank { null }
         if (uiScale == null || uiScale !in 0.70..1.60) {
             uiScaleSetting.error = "Use a value from 0.70 to 1.60"
             invalid = true
@@ -1765,6 +2814,13 @@ class MainActivity : Activity() {
         if (undoHistoryLimit == null || undoHistoryLimit !in 1..50) {
             undoHistoryLimitSetting.error = "Use a whole number from 1 to 50"
             invalid = true
+        }
+        if (assistantBaseUrl.isNotBlank()) {
+            runCatching { AssistantEndpointResolver.resolve(assistantBaseUrl) }
+                .onFailure {
+                    assistantBaseUrlSetting.error = it.message ?: "Use a valid HTTPS API URL"
+                    invalid = true
+                }
         }
         if (invalid) return
 
@@ -1817,6 +2873,11 @@ class MainActivity : Activity() {
             customPlotThemes = customPlotThemesDraft.toList(),
             activePlotThemeId = activePlotThemeId,
         )
+        container.assistantStore.saveConfiguration(
+            baseUrl = assistantBaseUrl,
+            model = assistantModel,
+            apiKey = assistantEnteredKey,
+        )
         setBusy(true, "Saving settings and syncing ${RepoConfig.CONFIG_PATH}…")
         settingsViewModel.saveSettings(
             next = next,
@@ -1824,6 +2885,32 @@ class MainActivity : Activity() {
             snippets = filterSnippets.toList(),
             developerMode = developerMode,
         )
+    }
+
+    private fun saveAssistantConfigurationAndReload() {
+        val baseUrl = assistantBaseUrlSetting.text.toString().trim()
+        val model = assistantModelSetting.text.toString().trim()
+        val enteredKey = assistantApiKeySetting.text.toString().trim().ifBlank { null }
+        val hasStoredKey = container.assistantStore.loadConfiguration().apiKey.isNotBlank()
+        var invalid = false
+        val endpoint = runCatching { AssistantEndpointResolver.resolve(baseUrl) }
+            .getOrElse {
+                assistantBaseUrlSetting.error = it.message ?: "Use a valid HTTPS API URL"
+                invalid = true
+                null
+            }
+        if (model.isBlank()) {
+            assistantModelSetting.error = "MODEL is required"
+            invalid = true
+        }
+        if (enteredKey == null && !hasStoredKey) {
+            assistantApiKeySetting.error = "API_KEY is required"
+            invalid = true
+        }
+        if (invalid) return
+        container.assistantStore.saveConfiguration(baseUrl, model, enteredKey)
+        Toast.makeText(this, "Assistant configured for ${endpoint?.provider}. Reloading…", Toast.LENGTH_SHORT).show()
+        recreate()
     }
 
     private fun showReportDialog() {
@@ -2475,8 +3562,19 @@ class MainActivity : Activity() {
     private fun editFilterSnippet(existing: FilterSnippet?) {
         val name = styledInput("snippet.name").apply { setText(existing?.name.orEmpty()) }
         val query = styledInput("snippet.query").apply { isSingleLine = false; minLines = 4; gravity = Gravity.TOP; setText(existing?.query ?: "SELECT * WHERE ") }
-        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, dp(14), 0); addView(name, spacedMatchWidth(5)); addView(query, matchWidth()) }
-        val dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New filtering snippet" else "Edit filtering snippet")
+        lateinit var dialog: AlertDialog
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+            if (existing == null) addView(assistantCreationButton(AssistantCreationPrompts.spec(AssistantCreationKind.FILTERING)) { generated ->
+                name.setText(generated.requiredGeneratedText("name"))
+                query.setText(generated.requiredGeneratedText("query"))
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            }, spacedMatchWidth(6))
+            addView(name, spacedMatchWidth(5))
+            addView(query, matchWidth())
+        }
+        dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New filtering snippet" else "Edit filtering snippet")
             .setView(body).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -2648,11 +3746,22 @@ class MainActivity : Activity() {
         val back = styledInput("BACKGROUND_COLOR / .back assignment").apply { isSingleLine = false; minLines = 2; gravity = Gravity.TOP; setText(source?.backgroundScript.orEmpty()) }
         val content = styledInput("CONTENT / .content assignment").apply { isSingleLine = false; minLines = 2; gravity = Gravity.TOP; setText(source?.contentScript.orEmpty()) }
         val example = infoText("Compact target: table.PRICE.fore = \"#f54900\" or table.back = \"#ff000044\". Legacy table['MATCHING_ROW']['PRICE'].fore remains supported. Content supports ${'$'}{COLUMN} and ${'$'}value.").apply { setTextColor(MUTED) }
+        lateinit var dialog: AlertDialog
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(3), dp(14), dp(3)); setBackgroundColor(BLACK)
-            addView(example, spacedMatchWidth(6)); listOf(name, query, fore, back, content).forEach { addView(it, spacedMatchWidth(5)) }
+            addView(example, spacedMatchWidth(6))
+            if (existing == null) addView(assistantCreationButton(AssistantCreationPrompts.spec(if (mapping) AssistantCreationKind.COLOR_MAPPING else AssistantCreationKind.FLAGGING)) { generated ->
+                name.setText(generated.requiredGeneratedText("name"))
+                query.setText(generated.requiredGeneratedText("query"))
+                fore.setText(generated.optString("foregroundScript"))
+                back.setText(generated.optString("backgroundScript"))
+                content.setText(generated.optString("contentScript"))
+                require(listOf(fore.text, back.text, content.text).any { it.isNotBlank() }) { "Generated style needs at least one foreground, background, or content script." }
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            }, spacedMatchWidth(6))
+            listOf(name, query, fore, back, content).forEach { addView(it, spacedMatchWidth(5)) }
         }
-        val dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New ${if (mapping) "Color Mapping" else "flagging method"}" else "Edit ${existing.name}")
+        dialog = AlertDialog.Builder(this).setTitle(if (existing == null) "New ${if (mapping) "Color Mapping" else "flagging method"}" else "Edit ${existing.name}")
             .setView(ScrollView(this).apply { addView(body, matchWidth()) }).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -2691,14 +3800,22 @@ class MainActivity : Activity() {
     private fun promptAddField() {
         val keyInput = styledInput("Field key, e.g. merchant")
         val valueInput = styledInput("Optional value or formula")
+        lateinit var dialog: AlertDialog
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, dp(14), 0)
             addView(infoText("Adds a real field to the current form. It becomes part of the JSON schema only after Amend/Edit commits a nonblank value. The optional value supports JavaScript (=) and SQLite (==) formulas.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            addView(assistantCreationButton(AssistantCreationPrompts.spec(AssistantCreationKind.REAL_FIELD, coreTableData().keys)) { generated ->
+                val generatedKey = generated.requiredGeneratedText("key")
+                require(currentData.keys.none { it.equals(generatedKey, true) }) { "Field '$generatedKey' already exists." }
+                keyInput.setText(generatedKey)
+                valueInput.setText(generated.optString("value"))
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            }, spacedMatchWidth(6))
             addView(keyInput, spacedMatchWidth(5))
             addView(formulaInputRow("new field", valueInput), matchWidth())
         }
-        val dialog = AlertDialog.Builder(this)
+        dialog = AlertDialog.Builder(this)
             .setTitle("Add field")
             .setView(body)
             .setNegativeButton("Cancel", null)
@@ -2841,10 +3958,19 @@ class MainActivity : Activity() {
             setText(existing?.expression ?: snippet?.expression.orEmpty())
         }
         val formulaRow = formulaInputRow(existing?.name ?: "imaginary field", value)
+        lateinit var dialog: AlertDialog
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, dp(14), 0)
             addView(infoText("Imaginary fields never modify the Financial JSON. The value is optional: leave it blank to create a manual-only column. Use = for JavaScript and == for a SQLite scalar expression. A manual value entered from Edit row overrides the formula for that row.").apply { setTextColor(MUTED) }, spacedMatchWidth(6))
+            if (existing == null) addView(assistantCreationButton(AssistantCreationPrompts.spec(AssistantCreationKind.IMAGINARY_FIELD)) { generated ->
+                val generatedName = generated.requiredGeneratedText("name")
+                require(coreTableData().keys.none { it.equals(generatedName, true) }) { "A real JSON field already uses '$generatedName'." }
+                require(imaginaryFieldsDraft.none { it.name.equals(generatedName, true) }) { "Imaginary field '$generatedName' already exists." }
+                name.setText(generatedName)
+                value.setText(generated.optString("expression"))
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            }, spacedMatchWidth(6))
             addView(accordion("Built-in snippets", initiallyOpen = false) { examples ->
                 BuiltinExamples.imaginaryFieldSnippets.forEach { item ->
                     examples.addView(TextView(this@MainActivity).apply {
@@ -2863,7 +3989,7 @@ class MainActivity : Activity() {
             addView(name, spacedMatchWidth(5))
             addView(formulaRow, matchWidth())
         }
-        val dialog = AlertDialog.Builder(this)
+        dialog = AlertDialog.Builder(this)
             .setTitle(if (existing == null) "Add imaginary field" else "Edit imaginary field")
             .setView(ScrollView(this).apply { addView(body, matchWidth()) })
             .setNegativeButton("Cancel", null).setPositiveButton("Save", null).create()
@@ -2945,7 +4071,7 @@ class MainActivity : Activity() {
                     persistImaginaryFields("Imaginary field updated."); dialog?.dismiss(); showImaginaryFieldManager()
                 }
             }, LinearLayout.LayoutParams(dp(42), dp(32)))
-            row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png"); applyActionIcon(this, "Edit", "Edit.png"); setOnClickListener { dialog?.dismiss(); promptAddImaginaryField(field) } }, LinearLayout.LayoutParams(dp(48), dp(32)))
+            row.addView(TextView(this).apply { text = "Edit"; gravity = Gravity.CENTER; setTextColor(PRIMARY); AppFonts.apply(this); applyActionIcon(this, "Edit", "Edit.png"); setOnClickListener { dialog?.dismiss(); promptAddImaginaryField(field) } }, LinearLayout.LayoutParams(dp(48), dp(32)))
             row.addView(TextView(this).apply {
                 text = "×"; gravity = Gravity.CENTER; setTextColor(RED); AppFonts.apply(this, bold = true); applyActionIcon(this, "Delete", "Delete.png")
                 setOnClickListener {
@@ -4018,10 +5144,16 @@ class MainActivity : Activity() {
     } catch (_: IllegalArgumentException) { null }
 
     private fun showTab(tab: Tab) {
+        if (tab == Tab.ASSISTANT && !container.assistantStore.isConfigured()) {
+            statusText.text = "Complete Assistant settings first."
+            drawerRoot.openDrawer()
+            return
+        }
         activeTab = tab
         tableScreen.visibility = if (tab == Tab.TABLE) View.VISIBLE else View.GONE
         statScreen.visibility = if (tab == Tab.STAT) View.VISIBLE else View.GONE
         filesScreen.visibility = if (tab == Tab.FILES) View.VISIBLE else View.GONE
+        assistantScreen.visibility = if (tab == Tab.ASSISTANT) View.VISIBLE else View.GONE
         updateTabButtons()
     }
 
@@ -4030,6 +5162,7 @@ class MainActivity : Activity() {
         styleTab(tableTabButton, activeTab == Tab.TABLE)
         styleTab(statTabButton, activeTab == Tab.STAT)
         styleTab(filesTabButton, activeTab == Tab.FILES)
+        if (::assistantTabButton.isInitialized) styleTab(assistantTabButton, activeTab == Tab.ASSISTANT)
     }
 
     private fun styleTab(button: Button, active: Boolean) {

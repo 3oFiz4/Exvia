@@ -7,6 +7,7 @@ import xyz.x3ofiz4.exvia.data.local.SelectedFileStore
 import xyz.x3ofiz4.exvia.data.local.LocalStagingStore
 import xyz.x3ofiz4.exvia.data.local.SettingsStore
 import xyz.x3ofiz4.exvia.data.local.TokenStore
+import xyz.x3ofiz4.exvia.data.local.AssistantStore
 import xyz.x3ofiz4.exvia.data.repository.ConfigurationRepositoryImpl
 import xyz.x3ofiz4.exvia.data.repository.GitHubExpenseRepository
 import xyz.x3ofiz4.exvia.domain.repository.ConfigurationRepository
@@ -17,6 +18,7 @@ class ExviaContainer(context: Context) {
     private val appContext = context.applicationContext
 
     val tokenStore = TokenStore(appContext)
+    val assistantStore = AssistantStore(appContext)
     val settingsStore = SettingsStore(appContext)
     val fileCache = ExviaFileCache(appContext)
     val selectedFileStore = SelectedFileStore(appContext)

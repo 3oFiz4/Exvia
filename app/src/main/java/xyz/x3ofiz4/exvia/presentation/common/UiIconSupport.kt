@@ -17,9 +17,19 @@ import xyz.x3ofiz4.exvia.domain.model.settings.UiIconMode
  * Missing, empty, or undecodable files deliberately resolve to null so UI construction can never fail.
  */
 object UiIconSupport {
+    /** Matches a complete `${name}` template marker, including its literal closing brace. */
+    private val TEMPLATE_EXPRESSION_REGEX = Regex("""\$\{[^}]+\}""")
+
+    /**
+     * Assets cannot change while an APK is running. Remembering files which could not be
+     * decoded prevents every redraw/rebuild from repeatedly asking BitmapFactory to decode
+     * the same missing, empty, or corrupt file.
+     */
+    private val unavailableAssets = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     fun assetFor(label: String): String {
         val clean = label
-            .replace(Regex("\\$\\{[^}]+}"), "")
+            .replace(TEMPLATE_EXPRESSION_REGEX, "")
             .replace("→", " ")
             .replace("·", " ")
             .replace("›", " ")
@@ -44,15 +54,35 @@ object UiIconSupport {
         return "$base.png"
     }
 
-    fun load(context: Context, assetName: String, tint: Int, sizePx: Int): Drawable? = runCatching {
-        context.assets.open("icons/$assetName").use { input ->
-            val bitmap = BitmapFactory.decodeStream(input) ?: return null
-            BitmapDrawable(context.resources, bitmap).apply {
-                setBounds(0, 0, sizePx, sizePx)
-                setColorFilter(tint, PorterDuff.Mode.SRC_IN)
+    fun load(context: Context, assetName: String, tint: Int, sizePx: Int): Drawable? {
+        if (assetName.isBlank() || assetName in unavailableAssets) return null
+
+        return try {
+            context.assets.open("icons/$assetName").use { input ->
+                // A zero-byte placeholder is not a PNG. Skip it before invoking the native
+                // image decoder; this keeps optional icons completely outside startup risk.
+                if (input.available() <= 0) {
+                    unavailableAssets += assetName
+                    return null
+                }
+
+                val bitmap = BitmapFactory.decodeStream(input)
+                if (bitmap == null || bitmap.width <= 0 || bitmap.height <= 0) {
+                    bitmap?.recycle()
+                    unavailableAssets += assetName
+                    return null
+                }
+
+                BitmapDrawable(context.resources, bitmap).apply {
+                    setBounds(0, 0, sizePx.coerceAtLeast(1), sizePx.coerceAtLeast(1))
+                    setColorFilter(tint, PorterDuff.Mode.SRC_IN)
+                }
             }
+        } catch (_: Throwable) {
+            unavailableAssets += assetName
+            null
         }
-    }.getOrNull()
+    }
 
     fun apply(
         view: TextView,
@@ -63,13 +93,14 @@ object UiIconSupport {
         drawablePaddingPx: Int,
         assetName: String = assetFor(label),
         endAssetName: String? = null,
-    ) {
+    ): Boolean {
         view.contentDescription = label
         val start = if (mode == UiIconMode.TEXT_ONLY) null else load(view.context, assetName, primary, iconSizePx)
         val end = if (mode == UiIconMode.TEXT_ONLY || endAssetName == null) null else load(view.context, endAssetName, primary, iconSizePx)
         view.text = if (mode == UiIconMode.ICON_ONLY) "" else label
         view.compoundDrawablePadding = drawablePaddingPx
         view.setCompoundDrawables(start, null, end, null)
+        return start != null || end != null
     }
 }
 
