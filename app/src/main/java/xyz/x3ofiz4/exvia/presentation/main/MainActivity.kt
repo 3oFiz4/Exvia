@@ -611,7 +611,7 @@ class MainActivity : Activity() {
         filesTabButton = styledButton("Files").apply { setOnClickListener { showTab(Tab.FILES) } }
         if (container.assistantStore.isConfigured()) {
             assistantTabButton = styledButton("Assistant").apply {
-                applyActionIcon(this, "Assistant", "assistant.png")
+                applyActionIcon(this, "Assistant", "Assistant.png")
                 setOnClickListener { showTab(Tab.ASSISTANT) }
             }
         }
@@ -916,10 +916,10 @@ class MainActivity : Activity() {
             gravity = Gravity.BOTTOM
             setPadding(0, dp(5), 0, 0)
         }
-        val infoButton = assistantIconButton("Assistant information", "info.png", "!").apply {
+        val infoButton = assistantIconButton("Assistant information", "Info.png", "!").apply {
             setOnClickListener { showAssistantInfo() }
         }
-        val addButton = assistantIconButton("Add file", "add_file.png", "+").apply {
+        val addButton = assistantIconButton("Add file", "Add_file.png", "+").apply {
             setOnClickListener { chooseAssistantFiles() }
         }
         assistantInput = styledInput("Message or /stat, /stat.price, /head").apply {
@@ -930,7 +930,7 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_FLAG_NO_ENTER_ACTION
         }
-        val sendButton = assistantIconButton("Send message", "send.png", "->").apply {
+        val sendButton = assistantIconButton("Send message", "Send.png", "->").apply {
             setOnClickListener { sendAssistantMessage() }
         }
         composer.addView(infoButton, LinearLayout.LayoutParams(dp(48), dp(52)).apply { marginEnd = dp(3) })
@@ -1204,7 +1204,7 @@ class MainActivity : Activity() {
             primary = PRIMARY,
             iconSizePx = dp(24),
             drawablePaddingPx = 0,
-            assetName = "assisstant.png",
+            assetName = "Assisstant.png",
         )
         if (!loaded) text = "AI"
         contentDescription = "Generate ${spec.title} with AI"
@@ -1292,7 +1292,7 @@ class MainActivity : Activity() {
             primary = PRIMARY,
             iconSizePx = dp(24),
             drawablePaddingPx = 0,
-            assetName = "loading.png",
+            assetName = "Loading.png",
         )
         if (!loaded) {
             button.text = "..."
@@ -1316,7 +1316,7 @@ class MainActivity : Activity() {
             primary = PRIMARY,
             iconSizePx = dp(24),
             drawablePaddingPx = 0,
-            assetName = "assisstant.png",
+            assetName = "Assisstant.png",
         )
         if (!loaded) button.text = "AI"
     }
