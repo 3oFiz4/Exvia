@@ -25,8 +25,8 @@ android {
         applicationId = "xyz.x3ofiz4.exvia"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "1.13.6"
+        versionCode = 24
+        versionName = "1.13.7"
         manifestPlaceholders["exviaAppIcon"] = if (hasValidSourceLogo || hasValidResourceLogo) {
             "@drawable/exvia_logo"
         } else {

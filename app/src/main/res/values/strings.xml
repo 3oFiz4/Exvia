@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Exvia</string>
+    <string name="widget_name">Exvia Quick Amend</string>
+    <string name="widget_description">Quickly amend expense entries directly into the configured JSON file.</string>
 </resources>

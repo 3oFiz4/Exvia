@@ -1,66 +1,46 @@
-# Exvia v1.11 modified and created files
+# Exvia v1.13.7 modified and created files
 
 ## Modified
 
-### `app/src/main/java/com/example/exp_tracker/MainActivity.kt`
-
-- Added triple-tap Developer Options toggle.
-- Added regular-mode Filtering Method selector that hides query syntax.
-- Added Interface scaling fields.
-- Added Report dialog and GitHub Issue submission flow.
-- Made advanced Settings sections conditional on Developer Options.
-- Collapsed built-in filtering and custom-metric examples.
-- Changed Save settings to synchronize the hidden config file before reload.
-- Added a defensive Files-section filter for dot-prefixed/config JSON files.
-- Applied UI scale to density-based dimensions and text scale to the view tree/dialogs.
-
-### `app/src/main/java/com/example/exp_tracker/Models.kt`
-
-- Added `reportRepo`, `uiScale`, and `textScale` to `RepoSettings`.
-
-### `app/src/main/java/com/example/exp_tracker/SettingsStore.kt`
-
-- Persisted report repository and interface scale values.
-- Added Developer Options persistence with default `true`.
-- Added sync-safe configuration JSON serialization.
-
-### `app/src/main/java/com/example/exp_tracker/GitHubApi.kt`
-
-- Added hidden `.exvia-config.json` exclusion.
-- Reserved dot-prefixed expense filenames.
-- Added generic text-file upsert for synchronized configuration.
-- Added GitHub Issue creation support.
-
-### `app/src/main/java/com/example/exp_tracker/AppFonts.kt`
-
-- Added non-compounding text scaling for complete view trees.
-- Preserved text scale when only font weight changes later.
-
 ### `app/build.gradle.kts`
+- Bumped `versionCode` to `24`.
+- Bumped `versionName` to `"1.13.7"`.
 
-- Updated `versionName` to `1.11`.
-- Updated `versionCode` to `12`.
+### `app/src/main/AndroidManifest.xml`
+- Registered `ExpenseAppWidgetProvider` receiver with `APPWIDGET_UPDATE` action and `@xml/expense_app_widget_info` metadata.
+- Registered `WidgetEntryActivity` with `@style/WidgetEntryTheme` and soft input handling.
 
-### `README.md`
+### `app/src/main/java/xyz/x3ofiz4/exvia/presentation/main/MainActivity.kt`
+- Added call to `ExpenseAppWidgetProvider.updateAllWidgets(this, "Data amended")` on `event.amend` automation events.
+- Added call to `ExpenseAppWidgetProvider.updateAllWidgets(this)` on data revisions / state changes.
 
-- Updated build, Developer Options, filtering, config sync, scaling, and Report instructions.
+### `app/src/main/res/values/strings.xml`
+- Added `widget_name` ("Exvia Quick Amend") and `widget_description`.
 
-### `MODIFIED_FILES.md`
-
-- Replaced the v1.10 list with this v1.11 file inventory.
+### `app/src/main/res/values/styles.xml`
+- Added `WidgetEntryTheme` translucent floating dialog style.
 
 ## Created
 
-### `V1.11_CHANGE_SPEC.md`
+### Presentation / Widget
+- `app/src/main/java/xyz/x3ofiz4/exvia/presentation/widget/ExpenseAppWidgetProvider.kt`: AppWidgetProvider managing Home Screen widget RemoteViews, dynamic columns, click PendingIntents, and live updates.
+- `app/src/main/java/xyz/x3ofiz4/exvia/presentation/widget/WidgetEntryActivity.kt`: Interactive native Android dialog activity with dynamic columns, auto-completer (`AutoCompleteTextView` / `MultiAutoCompleteTextView`), current date auto-population, JetBrains Mono typography, and Amend action.
+- `app/src/main/java/xyz/x3ofiz4/exvia/presentation/widget/WidgetViewModel.kt`: MVVM ViewModel coordinating repository queries, schema evaluations, suggestion generation, and amendments.
+- `app/src/main/java/xyz/x3ofiz4/exvia/presentation/widget/WidgetUiState.kt`: Immutable UI state representation for widget components.
 
-- Exact behavior and implementation notes for the v1.11 features.
+### Resources & Layouts
+- `app/src/main/res/xml/expense_app_widget_info.xml`: AppWidgetProviderInfo configuration.
+- `app/src/main/res/layout/widget_expense_layout.xml`: Home screen RemoteViews layout matching `prototype/widget_idea.html`.
+- `app/src/main/res/layout/widget_column_item.xml`: Layout for dynamic column rows in RemoteViews.
+- `app/src/main/res/layout/activity_widget_entry.xml`: Layout for interactive native entry dialog.
+- `app/src/main/res/drawable/bg_widget_card.xml`: Black background card with red border and rounded corners.
+- `app/src/main/res/drawable/widget_input_underline.xml`: Red bottom-border underline for form inputs.
+- `app/src/main/res/drawable/bg_widget_button.xml`: Black background button with red border and rounded corners.
+- `app/src/main/res/drawable/bg_widget_button_pressed.xml`: Pressed state background for Amend button.
+- `app/src/main/res/drawable/selector_widget_button.xml`: State selector for Amend button.
 
-## Runtime-created file
+### Testing
+- `app/src/test/java/xyz/x3ofiz4/exvia/presentation/widget/WidgetViewModelTest.kt`: Unit tests verifying widget UI state defaults, date formatting, frequency-based suggestion computation, and path display.
 
-Exvia creates or updates this file in the configured GitHub repository when Settings are saved:
-
-```text
-Financial/.exvia-config.json
-```
-
-It is not a source-tree file and is hidden from the Files section. It never contains the GitHub PAT.
+### Specifications
+- `V1.13.7_CHANGE_SPEC.md`: Full change specification for Exvia v1.13.7.

@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_container"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_widget_card"
+    android:orientation="vertical"
+    android:paddingStart="16dp"
+    android:paddingTop="8dp"
+    android:paddingEnd="16dp"
+    android:paddingBottom="8dp">
+
+    <!-- Target file indicator (determined by default file config) -->
+    <TextView
+        android:id="@+id/widget_target_file"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:text="--> expenses.json"
+        android:textColor="#CBD5E1"
+        android:textSize="13sp" />
+
+    <!-- Dynamic columns container -->
+    <LinearLayout
+        android:id="@+id/widget_inputs_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="vertical">
+
+        <!-- Default Date row (Auto-added current date) -->
+        <TextView
+            android:id="@+id/widget_input_date"
+            android:layout_width="match_parent"
+            android:layout_height="32dp"
+            android:background="@drawable/widget_input_underline"
+            android:fontFamily="monospace"
+            android:gravity="center_vertical"
+            android:hint="date (optional)"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#7D7D7D"
+            android:textSize="13sp" />
+
+        <!-- Default Price row -->
+        <TextView
+            android:id="@+id/widget_input_price"
+            android:layout_width="match_parent"
+            android:layout_height="32dp"
+            android:layout_marginTop="4dp"
+            android:background="@drawable/widget_input_underline"
+            android:fontFamily="monospace"
+            android:gravity="center_vertical"
+            android:hint="0.00"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#7D7D7D"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- Amend button -->
+    <Button
+        android:id="@+id/widget_btn_amend"
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:layout_marginTop="16dp"
+        android:background="@drawable/selector_widget_button"
+        android:fontFamily="monospace"
+        android:text="Amend"
+        android:textAllCaps="false"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <!-- Log text line -->
+    <TextView
+        android:id="@+id/widget_log_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:fontFamily="monospace"
+        android:text="log: Ready"
+        android:textColor="#86EFAC"
+        android:textSize="12sp" />
+
+</LinearLayout>

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Widget Idea</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  </head>
+  <body>
+    <!-- Remember, the UI of this widget resembles exactly like the Input controls in Table Section -->
+    <!-- NOTE: The auto-completer MUST also work in the widget version -->
+    <div id="container" class="bg-black w-[500px] h-auto px-4 py-2">
+      <p class="text-slate-300 jb-mono w-full h-auto">
+        --> september_expenses.json
+        <!-- this will show the file name it targets for -->
+        <!-- this file is determined by default file config -->
+      </p>
+      <!--For this input element Check if it is defined, it looks exactly like the basic inputs in Table section, but for widgets -->
+      <!--For value,  Date must auto add, just like in the app, ensure it works for widget as well -->
+      <input
+        type="text"
+        placeholder="date (optional)"
+        name="date"
+        value="10/09/26 @ 03:39"
+        class="text-white w-full h-8 border-b-1 border-red-500"
+      />
+      <input
+        type="text"
+        placeholder="0.00"
+        name="price"
+        value=""
+        class="text-white w-full h-8 border-b-1 border-red-500"
+      />
+      <!-- Depends on how many columns in the data exist for the file, add them -->
+      <button
+        type="submit"
+        class="text-white mt-10 w-full h-auto p-2 bg-black border-red-500 border-1 rounded-lg"
+        value="Send"
+      >
+        Amend
+      </button>
+      <p class="text-green-300 jb-mono w-full h-auto">
+        log: Data amended
+        <!-- this will show the log, again, very similar to Exvia log -->
+      </p>
+    </div>
+  </body>
+</html>

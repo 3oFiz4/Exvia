@@ -380,7 +380,12 @@ class MainActivity : Activity() {
                     is MainEffect.Error -> handleError(effect.throwable as? Exception ?: Exception(effect.throwable), effect.prefix)
                     is MainEffect.ToastMessage -> Toast.makeText(this, effect.message, Toast.LENGTH_SHORT).show()
                     is MainEffect.GitHistoryLoaded -> renderGitHistory(effect.page)
-                    is MainEffect.AutomationEvent -> triggerAutomationEvent(effect.name, effect.payload)
+                    is MainEffect.AutomationEvent -> {
+                        triggerAutomationEvent(effect.name, effect.payload)
+                        if (effect.name == "event.amend") {
+                            xyz.x3ofiz4.exvia.presentation.widget.ExpenseAppWidgetProvider.updateAllWidgets(this, "Data amended")
+                        }
+                    }
                 }
             }
         }
@@ -445,6 +450,7 @@ class MainActivity : Activity() {
         }
         if (dataChanged && ::dynamicForm.isInitialized) {
             renderedRevision = state.revision
+            xyz.x3ofiz4.exvia.presentation.widget.ExpenseAppWidgetProvider.updateAllWidgets(this)
             renderDynamicForm(state.sourceData)
             renderTable(state.visibleData)
             renderStats(state.visibleData)
