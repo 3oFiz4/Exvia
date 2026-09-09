@@ -7,15 +7,16 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
+import android.os.Build
 import android.widget.RemoteViews
 import xyz.x3ofiz4.exvia.R
 import xyz.x3ofiz4.exvia.app.ExviaApplication
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 
 /**
  * AppWidgetProvider rendering the home screen widget according to prototype/widget_idea.html.
- * Uses native Android RemoteViews and connects to Exvia's MVVM architecture.
+ * Uses native Android RemoteViews with scrollable ListView for all available fields,
+ * non-radial outer border, and connects to Exvia's MVVM architecture.
  */
 class ExpenseAppWidgetProvider : AppWidgetProvider() {
 
@@ -25,8 +26,9 @@ class ExpenseAppWidgetProvider : AppWidgetProvider() {
         appWidgetIds: IntArray,
     ) {
         for (appWidgetId in appWidgetIds) {
-            val views = buildRemoteViews(context, null)
+            val views = buildRemoteViews(context, appWidgetId, null)
             appWidgetManager.updateAppWidget(appWidgetId, views)
+            appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_fields_list)
         }
     }
 
@@ -49,13 +51,16 @@ class ExpenseAppWidgetProvider : AppWidgetProvider() {
                 val componentName = ComponentName(context, ExpenseAppWidgetProvider::class.java)
                 val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)
                 if (appWidgetIds.isNotEmpty()) {
-                    val views = buildRemoteViews(context, statusMessage)
-                    appWidgetManager.updateAppWidget(appWidgetIds, views)
+                    for (appWidgetId in appWidgetIds) {
+                        val views = buildRemoteViews(context, appWidgetId, statusMessage)
+                        appWidgetManager.updateAppWidget(appWidgetId, views)
+                        appWidgetManager.notifyAppWidgetViewDataChanged(appWidgetId, R.id.widget_fields_list)
+                    }
                 }
             } catch (_: Exception) {}
         }
 
-        fun buildRemoteViews(context: Context, statusMessage: String?): RemoteViews {
+        fun buildRemoteViews(context: Context, appWidgetId: Int, statusMessage: String?): RemoteViews {
             val views = RemoteViews(context.packageName, R.layout.widget_expense_layout)
 
             // Resolve target file name from settings
@@ -66,72 +71,41 @@ class ExpenseAppWidgetProvider : AppWidgetProvider() {
             // Target file text: --> <filename> (slate-300 / #CBD5E1)
             views.setTextViewText(R.id.widget_target_file, "--> $targetFileName")
 
-            // Current date formatted: d/M/yy @ HH:mm
-            val currentDate = LocalDateTime.now().format(DateTimeFormatter.ofPattern("d/M/yy @ HH:mm"))
-            views.setTextViewText(R.id.widget_input_date, currentDate)
-
-            // Input price hint
-            views.setCharSequence(R.id.widget_input_price, "setHint", "0.00")
-
-            // Dynamic columns if extra keys are present in cache
-            views.removeAllViews(R.id.widget_inputs_container)
-
-            // Default date row
-            val dateRow = RemoteViews(context.packageName, R.layout.widget_column_item).apply {
-                setTextViewText(R.id.widget_column_item_text, currentDate)
-                setOnClickPendingIntent(
-                    R.id.widget_column_item_text,
-                    createPendingIntent(context, "date"),
-                )
+            // Set up RemoteViewsService intent for scrollable ListView of all possible fields
+            val serviceIntent = Intent(context, ExpenseWidgetRemoteViewsService::class.java).apply {
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                data = Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
             }
-            views.addView(R.id.widget_inputs_container, dateRow)
-
-            // Price row
-            val priceRow = RemoteViews(context.packageName, R.layout.widget_column_item).apply {
-                setCharSequence(R.id.widget_column_item_text, "setHint", "0.00")
-                setOnClickPendingIntent(
-                    R.id.widget_column_item_text,
-                    createPendingIntent(context, "price"),
-                )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                views.setRemoteAdapter(appWidgetId, R.id.widget_fields_list, serviceIntent)
+            } else {
+                @Suppress("DEPRECATION")
+                views.setRemoteAdapter(R.id.widget_fields_list, serviceIntent)
             }
-            views.addView(R.id.widget_inputs_container, priceRow)
+            views.setEmptyView(R.id.widget_fields_list, R.id.widget_empty_text)
 
-            // Determine if more columns exist in cached table
-            val targetPath = settings?.pathFor(targetFileName) ?: "Financial/$targetFileName"
-            val cachedFile = if (container != null && settings != null) container.fileCache.loadFile(settings, targetPath) else null
-            if (cachedFile != null) {
-                try {
-                    val root = org.json.JSONObject(cachedFile.text)
-                    val expenses = root.optJSONArray("expenses")
-                    if (expenses != null && expenses.length() > 0) {
-                        val firstObj = expenses.optJSONObject(0)
-                        if (firstObj != null) {
-                            val keys = firstObj.keys().asSequence().toList()
-                            val extraKeys = keys.filterNot { k ->
-                                k.contains("date", ignoreCase = true) ||
-                                k.contains("price", ignoreCase = true) ||
-                                k.contains("amount", ignoreCase = true)
-                            }
-                            for (extraKey in extraKeys.take(3)) {
-                                val extraRow = RemoteViews(context.packageName, R.layout.widget_column_item).apply {
-                                    setCharSequence(R.id.widget_column_item_text, "setHint", "$extraKey (optional)")
-                                    setOnClickPendingIntent(
-                                        R.id.widget_column_item_text,
-                                        createPendingIntent(context, extraKey),
-                                    )
-                                }
-                                views.addView(R.id.widget_inputs_container, extraRow)
-                            }
-                        }
-                    }
-                } catch (_: Exception) {}
+            // Set up PendingIntent template for ListView item clicks
+            val itemClickIntent = Intent(context, WidgetEntryActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
+            val mutableFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val itemClickPendingIntent = PendingIntent.getActivity(
+                context,
+                101,
+                itemClickIntent,
+                mutableFlags,
+            )
+            views.setPendingIntentTemplate(R.id.widget_fields_list, itemClickPendingIntent)
 
             // Amend button pending intent
             val amendIntent = createPendingIntent(context, "price")
             views.setOnClickPendingIntent(R.id.widget_btn_amend, amendIntent)
 
-            // Container click
+            // Target file header click opens entry activity
             val containerIntent = createPendingIntent(context, null)
             views.setOnClickPendingIntent(R.id.widget_target_file, containerIntent)
 
@@ -151,11 +125,16 @@ class ExpenseAppWidgetProvider : AppWidgetProvider() {
                 }
             }
             val requestCode = focusKey?.hashCode() ?: 100
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
             return PendingIntent.getActivity(
                 context,
                 requestCode,
                 intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                flags,
             )
         }
     }

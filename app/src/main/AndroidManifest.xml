@@ -39,5 +39,10 @@
             android:exported="true"
             android:theme="@style/WidgetEntryTheme"
             android:windowSoftInputMode="adjustResize|stateVisible" />
+
+        <service
+            android:name=".presentation.widget.ExpenseWidgetRemoteViewsService"
+            android:permission="android.permission.BIND_REMOTEVIEWS"
+            android:exported="false" />
     </application>
 </manifest>

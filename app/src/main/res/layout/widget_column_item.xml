@@ -1,14 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<TextView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/widget_column_item_text"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="32dp"
-    android:layout_marginTop="4dp"
-    android:background="@drawable/widget_input_underline"
-    android:fontFamily="monospace"
-    android:gravity="center_vertical"
-    android:paddingStart="4dp"
-    android:paddingEnd="4dp"
-    android:textColor="#FFFFFF"
-    android:textColorHint="#7D7D7D"
-    android:textSize="13sp" />
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/widget_column_item_text"
+        android:layout_width="match_parent"
+        android:layout_height="32dp"
+        android:layout_marginTop="2dp"
+        android:layout_marginBottom="2dp"
+        android:background="@drawable/widget_input_underline"
+        android:fontFamily="monospace"
+        android:gravity="center_vertical"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#7D7D7D"
+        android:textSize="13sp" />
+
+</LinearLayout>

@@ -53,4 +53,37 @@ class WidgetViewModelTest {
         val displayName = rawPath.substringAfterLast('/')
         assertEquals("september_expenses.json", displayName)
     }
+
+    @Test
+    fun allPossibleFields_mappedToFieldItemsWithCorrectValuesAndHints() {
+        val allKeys = listOf("date", "price", "description", "category", "tags")
+        val dateKey = "date"
+        val moneyKey = "price"
+        val currentDate = "10/09/26 @ 03:39"
+
+        val items = allKeys.map { key ->
+            val isDate = key.equals(dateKey, ignoreCase = true)
+            val isMoney = key.equals(moneyKey, ignoreCase = true)
+            val placeholder = when {
+                isMoney -> "0.00"
+                isDate -> "date (optional)"
+                else -> "$key (optional)"
+            }
+            val value = if (isDate) currentDate else ""
+            ExpenseWidgetViewsFactory.FieldItem(key = key, placeholder = placeholder, value = value)
+        }
+
+        assertEquals(5, items.size)
+        assertEquals("date", items[0].key)
+        assertEquals(currentDate, items[0].value)
+        assertEquals("date (optional)", items[0].placeholder)
+
+        assertEquals("price", items[1].key)
+        assertEquals("", items[1].value)
+        assertEquals("0.00", items[1].placeholder)
+
+        assertEquals("description", items[2].key)
+        assertEquals("", items[2].value)
+        assertEquals("description (optional)", items[2].placeholder)
+    }
 }
