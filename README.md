@@ -144,6 +144,7 @@ API_KEY, BASE_URL, MODEL
 
   </pre>
 </details>
+
 - [x] Automatic Schema Reconcilation via Receipt & Document OCR. A image scanner feature to scan image whether at real-time or assuming there is a given folder, parse the image and apply the operation to the database directly. This is useful, especially when most of your transactions relied on digital banking app, so you do not have to type anymore, but instead the app will do it's job. `(R+3)`
 - [ ] ~~Forecasting (ARIMA, SARIMA, MA, SMA), (still in consideration if using XGB, LGBM, or even CB is a applicable in here without sacrificing memory and app size) `(R+2)`~~
 - [x] Push notifications upon Amending for any instance of warning. For example, let's say I bought Ice Cream for 50 bucks, and my daily budget is 30 bucks, there will be a push notification that warns me about it. `(R+2)`
