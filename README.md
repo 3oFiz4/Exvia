@@ -70,7 +70,9 @@ https://github.com/user-attachments/assets/1a5c1559-9435-4bd3-8ea8-ae7c5da98057
 24. Notification system
 25. Environment Variable
 26. Custom key schema
-27. Icons 
+27. Icons
+28. Widgets (more will be added in the future)
+29. OCR Receipt Automaton (Plug-In)
 
 # To-Do (next release)
 
@@ -142,12 +144,11 @@ API_KEY, BASE_URL, MODEL
 
   </pre>
 </details>
-
-- [ ] Automatic Schema Reconcilation via Receipt & Document OCR. A image scanner feature to scan image whether at real-time or assuming there is a given folder, parse the image and apply the operation to the database directly. This is useful, especially when most of your transactions relied on digital banking app, so you do not have to type anymore, but instead the app will do it's job. `(R+3)`
+- [x] Automatic Schema Reconcilation via Receipt & Document OCR. A image scanner feature to scan image whether at real-time or assuming there is a given folder, parse the image and apply the operation to the database directly. This is useful, especially when most of your transactions relied on digital banking app, so you do not have to type anymore, but instead the app will do it's job. `(R+3)`
 - [ ] ~~Forecasting (ARIMA, SARIMA, MA, SMA), (still in consideration if using XGB, LGBM, or even CB is a applicable in here without sacrificing memory and app size) `(R+2)`~~
 - [x] Push notifications upon Amending for any instance of warning. For example, let's say I bought Ice Cream for 50 bucks, and my daily budget is 30 bucks, there will be a push notification that warns me about it. `(R+2)`
 - [ ] Export report as Document or .pdf. This will also include the plotting. `(R+3)`
 - [ ] Minimal, Lightweight, and Accurate voice recognition model that can be triggered by saying the word "Fin", and will listen for any word uttered by the user, and amending what is spoken to the database at a time `(R+4)`
 - [ ] Add an extended finance for Investment, Debt, and more. (By theory, you could imitate this in the app right now, without having this feature amended for next release. By categorizing your specific data, say INV (for Investment), create the field necessary, such as Future Value (FV), you could create a custom metric that calculates them) `(R+5)`
-- [ ] Improve overall UI, adding icon, and more `(R+2)`
+- [x] Improve overall UI, adding icon, and more `(R+2)`
 - [ ] Provide databaes alternative, such as Codeberg, or even MongoDB, Supabase, Discord (as a Database), or even Google Drive `(R+5)`
