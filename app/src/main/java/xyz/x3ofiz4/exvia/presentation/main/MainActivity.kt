@@ -2096,8 +2096,8 @@ class MainActivity : Activity() {
 
         ocrTemplatesListLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
         renderOcrTemplatesSettings()
-        body.addView(accordion("Receipt OCR Automaton", tooltip = "Monitor receipt folders and automatically extract expense entries using Google ML Kit.") { container ->
-            container.addView(infoText("Monitor folders for receipt images matching a regex pattern. Google ML Kit extracts text from defined bounding boxes and automatically appends structured expense rows into Exvia.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+        body.addView(accordion("Receipt OCR Automaton (Plug-In)", tooltip = "(Early Test) Monitor receipt folders and automatically extract expense entries using Google ML Kit.") { container ->
+            container.addView(infoText("(Early Test) Monitor folders for receipt images matching a regex pattern. Google ML Kit extracts text from defined bounding boxes and automatically appends structured expense rows into Exvia. This is a Plug-In used for digital receipt layout like QRIS, whose layout always the same everywhere. You can use this Plug-In, although be aware of bugs, and please report them. This is still on early phase!").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
             container.addView(ocrTemplatesListLayout, matchWidth())
             container.addView(styledButton("+ Add OCR Template").apply {
                 setOnClickListener {
