@@ -43,6 +43,7 @@ class GitHubApi(
         const val SCHEMA_RULES_PATH = ".exvia/schema-rules.json"
         const val METRIC_COLOR_MAPPINGS_PATH = ".exvia/metric-color-mappings.json"
         const val CUSTOM_METRIC_INPUTS_PATH = ".exvia/custom-metric-inputs.json"
+        const val OCR_TEMPLATES_PATH = ".exvia/receipt-ocr-templates.json"
     }
     private data class EditableDocument(val root: Any, val items: JSONArray)
 

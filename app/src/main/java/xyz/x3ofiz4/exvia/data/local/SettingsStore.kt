@@ -135,6 +135,7 @@ class SettingsStore(context: Context) {
             activeUiThemeId = prefs.getString(KEY_ACTIVE_UI_THEME, "builtin:${preset.id}") ?: "builtin:${preset.id}",
             customPlotThemes = customPlotThemes,
             activePlotThemeId = prefs.getString(KEY_ACTIVE_PLOT_THEME, "builtin:black") ?: "builtin:black",
+            ocrTemplates = parseOcrTemplates(prefs.getString(KEY_OCR_TEMPLATES, "[]") ?: "[]"),
         )
     }
 
@@ -165,6 +166,7 @@ class SettingsStore(context: Context) {
             .putString(KEY_CUSTOM_METRIC_INPUTS, JSONObject(settings.customMetricInputs).toString())
             .putString(KEY_FILE_SCRIPTS, fileScriptsToJson(settings.fileScripts))
             .putString(KEY_IMAGINARY_FIELDS, imaginaryFieldsToJson(settings.imaginaryFields))
+            .putString(KEY_OCR_TEMPLATES, ocrTemplatesToJson(settings.ocrTemplates))
             .putString(KEY_UI_SCALE, settings.uiScale.toString())
             .putString(KEY_TEXT_SCALE, settings.textScale.toString())
             .putString(KEY_ICON_MODE, settings.iconMode.id)
@@ -242,6 +244,7 @@ class SettingsStore(context: Context) {
         private const val KEY_METRIC_COLOR_MAPPINGS = "metric_color_mappings"
         private const val KEY_CUSTOM_METRIC_INPUTS = "custom_metric_inputs"
         private const val KEY_IMAGINARY_FIELDS = "imaginary_fields"
+        private const val KEY_OCR_TEMPLATES = "ocr_templates"
         private const val KEY_FILTER_SNIPPETS = "filter_snippets"
         private const val KEY_REPO_INIT_ASKED = "repo_initialization_asked"
         private const val KEY_DEVELOPER_MODE = "developer_mode"
@@ -510,6 +513,72 @@ class SettingsStore(context: Context) {
             put("format", "exvia-custom-metric-inputs-v1")
             put("items", JSONObject(items))
         }.toString(2) + "\n"
+
+        fun ocrTemplatesFileJson(items: List<OcrTemplateDefinition>): String = JSONObject().apply {
+            put("format", "exvia-receipt-ocr-templates-v1")
+            put("items", JSONArray(ocrTemplatesToJson(items)))
+        }.toString(2) + "\n"
+
+        fun parseOcrTemplates(text: String): List<OcrTemplateDefinition> = try {
+            val arr = JSONArray(text)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = obj.optString("name").trim()
+                if (name.isBlank()) return@mapNotNull null
+                val boxesArr = obj.optJSONArray("boundingBoxes") ?: JSONArray()
+                val boxes = (0 until boxesArr.length()).mapNotNull { j ->
+                    val boxObj = boxesArr.optJSONObject(j) ?: return@mapNotNull null
+                    OcrBoundingBox(
+                        name = boxObj.optString("name"),
+                        posX = boxObj.optDouble("posX", 0.0).toFloat(),
+                        posY = boxObj.optDouble("posY", 0.0).toFloat(),
+                        width = boxObj.optDouble("width", 0.0).toFloat(),
+                        height = boxObj.optDouble("height", 0.0).toFloat(),
+                        mapTo = boxObj.optString("mapTo"),
+                        script = boxObj.optString("script", ""),
+                        regex = boxObj.optString("regex", ""),
+                    )
+                }
+                val processedArr = obj.optJSONArray("processedFiles") ?: JSONArray()
+                val processed = (0 until processedArr.length()).map { processedArr.optString(it) }
+                OcrTemplateDefinition(
+                    id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
+                    name = name,
+                    folderUri = obj.optString("folderUri"),
+                    folderDisplayName = obj.optString("folderDisplayName"),
+                    fileNamePattern = obj.optString("fileNamePattern").ifBlank { ".*\\.(jpg|jpeg|png)" },
+                    boundingBoxes = boxes,
+                    enabled = obj.optBoolean("enabled", true),
+                    lastScannedTimestamp = obj.optLong("lastScannedTimestamp", 0L),
+                    processedFiles = processed,
+                )
+            }
+        } catch (_: Exception) { emptyList() }
+
+        fun ocrTemplatesToJson(items: List<OcrTemplateDefinition>): String = JSONArray().apply {
+            items.forEach { item -> put(JSONObject().apply {
+                put("id", item.id)
+                put("name", item.name)
+                put("folderUri", item.folderUri)
+                put("folderDisplayName", item.folderDisplayName)
+                put("fileNamePattern", item.fileNamePattern)
+                put("enabled", item.enabled)
+                put("lastScannedTimestamp", item.lastScannedTimestamp)
+                put("processedFiles", JSONArray(item.processedFiles))
+                put("boundingBoxes", JSONArray().apply {
+                    item.boundingBoxes.forEach { box -> put(JSONObject().apply {
+                        put("name", box.name)
+                        put("posX", box.posX.toDouble())
+                        put("posY", box.posY.toDouble())
+                        put("width", box.width.toDouble())
+                        put("height", box.height.toDouble())
+                        put("mapTo", box.mapTo)
+                        put("script", box.script)
+                        put("regex", box.regex)
+                    }) }
+                })
+            }) }
+        }.toString()
 
         fun environmentPayload(items: List<EnvironmentVariableDefinition>): JSONObject = JSONObject().apply {
             items.filter { it.enabled && it.name.isNotBlank() }.forEach { item ->

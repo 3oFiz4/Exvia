@@ -132,4 +132,27 @@ data class NamedPlotTheme(
     val theme: PlotTheme,
 )
 
+data class OcrBoundingBox(
+    val name: String,
+    val posX: Float,
+    val posY: Float,
+    val width: Float,
+    val height: Float,
+    val mapTo: String,
+    val script: String = "",
+    val regex: String = "",
+)
+
+data class OcrTemplateDefinition(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String,
+    val folderUri: String,
+    val folderDisplayName: String = "",
+    val fileNamePattern: String = ".*\\.(jpg|jpeg|png)",
+    val boundingBoxes: List<OcrBoundingBox> = emptyList(),
+    val enabled: Boolean = true,
+    val lastScannedTimestamp: Long = 0L,
+    val processedFiles: List<String> = emptyList(),
+)
+
 const val DEFAULT_SCRIPT_GROUP_ID = "default"

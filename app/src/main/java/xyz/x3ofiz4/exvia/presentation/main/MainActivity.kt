@@ -20,6 +20,11 @@ import xyz.x3ofiz4.exvia.app.ExviaContainer
 import xyz.x3ofiz4.exvia.presentation.statistics.StatisticsViewModel
 import xyz.x3ofiz4.exvia.presentation.notification.NotificationDispatcher
 import xyz.x3ofiz4.exvia.data.local.AssistantStore
+import xyz.x3ofiz4.exvia.data.ocr.ReceiptScanner
+import xyz.x3ofiz4.exvia.data.ocr.OcrPluginManager
+import xyz.x3ofiz4.exvia.presentation.ocr.ReceiptOcrEditorActivity
+import xyz.x3ofiz4.exvia.presentation.ocr.ReceiptWatcherService
+import kotlinx.coroutines.runBlocking
 import xyz.x3ofiz4.exvia.data.remote.AssistantApi
 import xyz.x3ofiz4.exvia.data.remote.AssistantAttachment
 import xyz.x3ofiz4.exvia.data.remote.AssistantMessage
@@ -87,6 +92,7 @@ class MainActivity : Activity() {
         private const val ASSISTANT_FILE_REQUEST = 7401
         private const val ASSISTANT_MAX_FILE_BYTES = 10 * 1024 * 1024
         private const val ASSISTANT_MAX_ATTACHMENTS = 5
+        private const val OCR_EDITOR_REQUEST = 7402
     }
 
     private enum class Tab { TABLE, STAT, FILES, ASSISTANT }
@@ -242,6 +248,8 @@ class MainActivity : Activity() {
     private var flaggingRulesDraft = mutableListOf<TableStyleRule>()
     private var colorMappingsDraft = mutableListOf<TableStyleRule>()
     private var imaginaryFieldsDraft = mutableListOf<ImaginaryFieldDefinition>()
+    private var ocrTemplatesDraft = mutableListOf<OcrTemplateDefinition>()
+    private lateinit var ocrTemplatesListLayout: LinearLayout
 
     private val formInputs = linkedMapOf<String, EditText>()
     private var selectedPath: String? = null
@@ -312,6 +320,7 @@ class MainActivity : Activity() {
         flaggingRulesDraft = settings.flaggingRules.toMutableList()
         colorMappingsDraft = settings.colorMappings.toMutableList()
         imaginaryFieldsDraft = settings.imaginaryFields.toMutableList()
+        ocrTemplatesDraft = settings.ocrTemplates.toMutableList()
 
         tooltipController = TooltipController(this, { PRIMARY }, { BLACK }, { WHITE })
         val lightPalette = isLightPalette(settings.palette)
@@ -349,11 +358,24 @@ class MainActivity : Activity() {
             }
             else -> mainViewModel.loadInitial(settings)
         }
+        ReceiptWatcherService.updateServiceState(this)
     }
 
     override fun onStart() {
         super.onStart()
         appInForeground = true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val refreshed = container.settingsStore.load()
+        if (refreshed.ocrTemplates != ocrTemplatesDraft) {
+            ocrTemplatesDraft = refreshed.ocrTemplates.toMutableList()
+            if (::ocrTemplatesListLayout.isInitialized) {
+                renderOcrTemplatesSettings()
+            }
+        }
+        ReceiptWatcherService.updateServiceState(this)
     }
 
     override fun onStop() {
@@ -1085,6 +1107,17 @@ class MainActivity : Activity() {
     @Deprecated("Legacy Activity result is retained for this dependency-free Activity UI.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == OCR_EDITOR_REQUEST) {
+            if (resultCode == RESULT_OK) {
+                settings = container.settingsStore.load()
+                ocrTemplatesDraft = settings.ocrTemplates.toMutableList()
+                if (::ocrTemplatesListLayout.isInitialized) {
+                    renderOcrTemplatesSettings()
+                }
+                ReceiptWatcherService.updateServiceState(this)
+            }
+            return
+        }
         if (requestCode != ASSISTANT_FILE_REQUEST || resultCode != RESULT_OK || data == null) return
         val uris = buildList {
             data.clipData?.let { clip -> for (index in 0 until clip.itemCount) add(clip.getItemAt(index).uri) }
@@ -2061,6 +2094,19 @@ class MainActivity : Activity() {
             customStatList = LinearLayout(this)
         }
 
+        ocrTemplatesListLayout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(BLACK) }
+        renderOcrTemplatesSettings()
+        body.addView(accordion("Receipt OCR Automaton", tooltip = "Monitor receipt folders and automatically extract expense entries using Google ML Kit.") { container ->
+            container.addView(infoText("Monitor folders for receipt images matching a regex pattern. Google ML Kit extracts text from defined bounding boxes and automatically appends structured expense rows into Exvia.").apply { setTextColor(MUTED) }, spacedMatchWidth(5))
+            container.addView(ocrTemplatesListLayout, matchWidth())
+            container.addView(styledButton("+ Add OCR Template").apply {
+                setOnClickListener {
+                    val intent = Intent(this@MainActivity, ReceiptOcrEditorActivity::class.java)
+                    startActivityForResult(intent, OCR_EDITOR_REQUEST)
+                }
+            }, spacedMatchWidth(6))
+        }, spacedMatchWidth(12))
+
         body.addView(styledButton("Report").apply { setOnClickListener { showReportDialog() } }, spacedMatchWidth(6))
         body.addView(styledButton("Save settings and reload").apply { setOnClickListener { saveSettings() } }, spacedMatchWidth(6))
         body.addView(styledButton("Close Settings", accent = SECONDARY).apply { setOnClickListener { drawerRoot.closeDrawer() } }, spacedMatchWidth(6))
@@ -2413,6 +2459,244 @@ class MainActivity : Activity() {
                 }
             }, matchWidth())
         }
+    }
+
+    private fun buildOcrPluginBanner(): View {
+        val banner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            val shape = GradientDrawable().apply {
+                setColor(Color.parseColor("#141414"))
+                setStroke(dp(1), Color.parseColor("#262626"))
+                cornerRadius = dp(4).toFloat()
+            }
+            background = shape
+        }
+
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val iconAndStatus = TextView(this).apply {
+            text = "🧩 OCR Add-on / Plug-in"
+            setTextColor(WHITE)
+            textSize = 12.5f
+            AppFonts.apply(this, bold = true)
+        }
+        headerRow.addView(iconAndStatus, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        val statusBadge = TextView(this).apply {
+            text = "Checking..."
+            setTextColor(MUTED)
+            textSize = 10.5f
+            AppFonts.apply(this)
+        }
+        headerRow.addView(statusBadge, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        banner.addView(headerRow, matchWidth())
+
+        val subtext = TextView(this).apply {
+            text = "On-demand Google ML Kit model (~15 MB). Keeps app download size small until installed."
+            setTextColor(MUTED)
+            textSize = 11f
+            AppFonts.apply(this)
+            setPadding(0, dp(4), 0, dp(6))
+        }
+        banner.addView(subtext, matchWidth())
+
+        val btnInstall = styledButton("📥 Install OCR Plug-in").apply {
+            textSize = 11f
+            visibility = View.GONE
+            setOnClickListener {
+                OcrPluginManager.showInstallDialog(this@MainActivity) {
+                    renderOcrTemplatesSettings()
+                }
+            }
+        }
+        banner.addView(btnInstall, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32)))
+
+        OcrPluginManager.checkPluginInstalled(this) { isInstalled, status ->
+            runOnUiThread {
+                when (status) {
+                    OcrPluginManager.PluginStatus.INSTALLED -> {
+                        statusBadge.text = "● Installed (Ready)"
+                        statusBadge.setTextColor(Color.parseColor("#22C55E"))
+                        btnInstall.visibility = View.GONE
+                    }
+                    OcrPluginManager.PluginStatus.GMS_UNAVAILABLE -> {
+                        statusBadge.text = "⚠️ GMS Unavailable"
+                        statusBadge.setTextColor(Color.parseColor("#EF4444"))
+                        btnInstall.visibility = View.GONE
+                    }
+                    else -> {
+                        statusBadge.text = "○ Not Installed (~15 MB)"
+                        statusBadge.setTextColor(Color.parseColor("#F59E0B"))
+                        btnInstall.visibility = View.VISIBLE
+                    }
+                }
+            }
+        }
+
+        return banner
+    }
+
+    private fun renderOcrTemplatesSettings() {
+        if (!::ocrTemplatesListLayout.isInitialized) return
+        ocrTemplatesListLayout.removeAllViews()
+
+        // 1. OCR Plug-in Status Banner
+        ocrTemplatesListLayout.addView(buildOcrPluginBanner(), spacedMatchWidth(6))
+
+        if (ocrTemplatesDraft.isEmpty()) {
+            ocrTemplatesListLayout.addView(
+                infoText("No OCR templates configured. Tap '+ Add OCR Template' below to create one.").apply {
+                    setTextColor(MUTED)
+                },
+                spacedMatchWidth(4)
+            )
+            return
+        }
+
+        ocrTemplatesDraft.forEachIndexed { index, template ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                val shape = GradientDrawable().apply {
+                    setColor(Color.parseColor("#141414"))
+                    setStroke(dp(1), if (template.enabled) PRIMARY else Color.parseColor("#333333"))
+                    cornerRadius = dp(4).toFloat()
+                }
+                background = shape
+            }
+
+            // Header row: Status Indicator, Template Name, Enable/Disable styled button
+            val headerRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+            val statusDot = TextView(this).apply {
+                text = if (template.enabled) "● " else "○ "
+                setTextColor(if (template.enabled) Color.parseColor("#22C55E") else MUTED)
+                textSize = 14f
+            }
+            headerRow.addView(statusDot, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+            val nameView = TextView(this).apply {
+                text = template.name
+                setTextColor(WHITE)
+                textSize = 13f
+                AppFonts.apply(this, bold = true)
+            }
+            headerRow.addView(nameView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+            val toggleBtn = styledButton(if (template.enabled) "Enabled" else "Disabled", accent = if (template.enabled) PRIMARY else SECONDARY).apply {
+                textSize = 11f
+                setOnClickListener {
+                    val updated = template.copy(enabled = !template.enabled)
+                    ocrTemplatesDraft[index] = updated
+                    persistOcrTemplates("OCR template '${template.name}' ${if (updated.enabled) "enabled" else "disabled"}.")
+                }
+            }
+            headerRow.addView(toggleBtn, LinearLayout.LayoutParams(dp(75), dp(30)))
+            card.addView(headerRow, matchWidth())
+
+            // Details
+            val detailsText = TextView(this).apply {
+                val folderName = template.folderDisplayName.ifBlank { "Folder selected" }
+                val boxCount = template.boundingBoxes.size
+                val scannedCount = template.processedFiles.size
+                text = "📁 $folderName\n🔍 Pattern: ${template.fileNamePattern}\n📦 $boxCount bounding box(es) · $scannedCount scanned"
+                setTextColor(MUTED)
+                textSize = 11f
+                AppFonts.apply(this)
+                setPadding(0, dp(4), 0, dp(6))
+            }
+            card.addView(detailsText, matchWidth())
+
+            // Actions row: Scan Now, Edit, Delete
+            val actionsRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+            val btnScanNow = styledButton("Scan Now").apply {
+                textSize = 11f
+                setOnClickListener {
+                    OcrPluginManager.checkPluginInstalled(this@MainActivity) { isInstalled, _ ->
+                        if (!isInstalled) {
+                            runOnUiThread {
+                                OcrPluginManager.showInstallDialog(this@MainActivity) {
+                                    renderOcrTemplatesSettings()
+                                }
+                            }
+                            return@checkPluginInstalled
+                        }
+                        runOnUiThread {
+                            statusText.text = "Scanning ${template.name} for receipts…"
+                        }
+                        Thread {
+                            val report = kotlinx.coroutines.runBlocking {
+                                ReceiptScanner.scanTemplate(this@MainActivity, template)
+                            }
+                            runOnUiThread {
+                                settings = container.settingsStore.load()
+                                ocrTemplatesDraft = settings.ocrTemplates.toMutableList()
+                                renderOcrTemplatesSettings()
+                                val msg = if (report.scannedCount > 0) {
+                                    "Scanned ${report.scannedCount} new receipt(s)!"
+                                } else if (report.errors.isNotEmpty()) {
+                                    "Scan error: ${report.errors.first()}"
+                                } else {
+                                    "No new receipts matching pattern in folder."
+                                }
+                                statusText.text = msg
+                                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                            }
+                        }.start()
+                    }
+                }
+            }
+            actionsRow.addView(btnScanNow, LinearLayout.LayoutParams(0, dp(32), 1f).apply { marginEnd = dp(4) })
+
+            val btnEdit = styledButton("Edit").apply {
+                textSize = 11f
+                setOnClickListener {
+                    val intent = Intent(this@MainActivity, ReceiptOcrEditorActivity::class.java).apply {
+                        putExtra(ReceiptOcrEditorActivity.EXTRA_TEMPLATE_ID, template.id)
+                    }
+                    startActivityForResult(intent, OCR_EDITOR_REQUEST)
+                }
+            }
+            actionsRow.addView(btnEdit, LinearLayout.LayoutParams(0, dp(32), 1f).apply { marginEnd = dp(4) })
+
+            val btnDelete = styledButton("Delete", accent = SECONDARY).apply {
+                textSize = 11f
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Delete OCR Template")
+                        .setMessage("Delete '${template.name}'?")
+                        .setPositiveButton("Delete") { _, _ ->
+                            ocrTemplatesDraft.removeAt(index)
+                            persistOcrTemplates("OCR template '${template.name}' deleted.")
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+            }
+            actionsRow.addView(btnDelete, LinearLayout.LayoutParams(0, dp(32), 1f))
+
+            card.addView(actionsRow, matchWidth())
+            ocrTemplatesListLayout.addView(card, spacedMatchWidth(6))
+        }
+    }
+
+    private fun persistOcrTemplates(message: String) {
+        settings = settings.copy(ocrTemplates = ocrTemplatesDraft.toList())
+        container.settingsStore.save(settings)
+        statusText.text = message
+        ReceiptWatcherService.updateServiceState(this)
+        renderOcrTemplatesSettings()
     }
 
     private fun groupSpinner(selectedId: String): Spinner {
@@ -2878,6 +3162,7 @@ class MainActivity : Activity() {
             activeUiThemeId = activeUiThemeId,
             customPlotThemes = customPlotThemesDraft.toList(),
             activePlotThemeId = activePlotThemeId,
+            ocrTemplates = ocrTemplatesDraft.toList(),
         )
         container.assistantStore.saveConfiguration(
             baseUrl = assistantBaseUrl,

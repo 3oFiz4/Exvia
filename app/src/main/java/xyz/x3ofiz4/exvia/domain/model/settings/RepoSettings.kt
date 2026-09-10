@@ -57,6 +57,7 @@ data class RepoSettings(
     val activeUiThemeId: String,
     val customPlotThemes: List<NamedPlotTheme>,
     val activePlotThemeId: String,
+    val ocrTemplates: List<xyz.x3ofiz4.exvia.domain.model.custom.OcrTemplateDefinition> = emptyList(),
 ) {
     fun pathFor(fileName: String): String = listOf(
         folder.trim('/'),

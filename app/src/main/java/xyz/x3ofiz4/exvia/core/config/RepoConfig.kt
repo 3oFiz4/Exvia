@@ -22,6 +22,7 @@ object RepoConfig {
     const val CUSTOM_PLOTS_PATH = ".exvia/custom-plots.json"
     const val FILE_SCRIPTS_PATH = ".exvia/file-scripts.json"
     const val IMAGINARY_FIELDS_PATH = ".exvia/imaginary-fields.json"
+    const val OCR_TEMPLATES_PATH = ".exvia/receipt-ocr-templates.json"
     const val TABLE_RULES_PATH = ".exvia/"
 
     val TICKER_COLORS = mapOf(

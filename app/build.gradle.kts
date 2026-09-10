@@ -25,8 +25,8 @@ android {
         applicationId = "xyz.x3ofiz4.exvia"
         minSdk = 26
         targetSdk = 36
-        versionCode = 24
-        versionName = "1.13.7"
+        versionCode = 25
+        versionName = "1.13.8"
         manifestPlaceholders["exviaAppIcon"] = if (hasValidSourceLogo || hasValidResourceLogo) {
             "@drawable/exvia_logo"
         } else {
@@ -69,8 +69,13 @@ dependencies {
     implementation(libs.ktor.client.logging)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.play.services.mlkit.text.recognition)
+    implementation(libs.play.services.base)
+    implementation(libs.androidx.documentfile)
+    implementation(libs.rhino)
 
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
